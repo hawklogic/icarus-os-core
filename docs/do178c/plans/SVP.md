@@ -25,7 +25,7 @@
 | 0.1 | 2025-01-26 | Souham Biswas | Initial draft |
 | 0.2 | 2026-04-01 | Souham Biswas | Added §4.5 Memory Protection Tests with red-team attack vectors and fault recovery verification |
 | 0.3 | 2026-04-11 | Souham Biswas | Added §4.6 Shared Service Module Tests for the v0.3.0 modules; updated §5.4 coverage baseline (91.8% line / 92.5% function across 196 host tests) |
-| 0.4 | 2026-09-27 | Souham Biswas | v0.5.0: added §4.7 Robustness Tests (CDC transmit ring, console retarget, SVC caller-buffer policy, nested-SVC guard, backup SRAM, table load extensions); added the SVC static checks to §6.1 and §6.4; host baseline 274 tests |
+| 0.4 | 2026-09-27 | Souham Biswas | v0.5.0: added §4.7 Robustness Tests (CDC transmit ring, console retarget, SVC caller-buffer policy, nested-SVC guard, backup SRAM, table load extensions, timed semaphore timeout on the system tick, target FPU-context probe for the context switch); added the SVC static checks to §6.1 and §6.4; host baseline 274 tests |
 
 ---
 
@@ -304,6 +304,7 @@ failing on target hardware.
 | `test_svc_guard.c` | 7 | HLR-KRN-076, HLR-KRN-096.2 | Nested gates detected, sequential gates allowed, depth unwinds; checksum mismatch callbacks may call kernel APIs (delivered in thread mode) |
 | `test_bkpram.c` | 5 | HLR-KRN-078, HLR-KRN-078.1, HLR-KRN-078.2 | Round trip; last byte accepted, one past rejected; zero length and NULL rejected; offset wrap rejected; data survives simulated resets until cleared |
 | `test_tables_load.c` | 10 | HLR-KRN-094.4 to HLR-KRN-094.7, HLR-KRN-092.3, HLR-KRN-090.3 | Identical retransmit idempotent; conflicting retransmit, gap, overrun and mixed schema rejected; abort; commit without prepare rejected; `tbl_get_info` copy-out; CRC wrapper matches the privileged implementation; CDC RX drop counter |
+| `test_task.c` (2 of its 143) | 2 | HLR-KRN-098, HLR-KRN-098.1 | `test_semaphore_consume_timeout_counts_elapsed_ticks`: with each sleep lasting 100 ticks (as when two other tasks use their full 50-tick slices), a 1000-tick timeout gives up after 1000–1099 ticks, not 1000 sleeps. `test_semaphore_consume_timeout_immediate_and_try`: an available semaphore is taken without sleeping, `max_ticks` == 0 tries once, and a 500-tick wait started just before the tick-counter wrap ends after 500–599 ticks. Both set the tick advance per sleep with the host-only `__sched_host_set_ticks_per_sleep()`; on the v0.4 code, which counted sleeps, they fail with 100000 and 50000 ticks elapsed |
 
 **Static checks:**
 
@@ -320,6 +321,16 @@ per-gate buffer checks inside `SVC_Handler_C()`, handler-mode detection in
 within `_Min_Stack_Size`), the PRIMASK lock around the transmit ring,
 retention of backup SRAM across a real reset, and the ROM bootloader
 entry (HLR-BSP-029).
+
+**Target FPU-context probe (HLR-KRN-016).** The context switch is
+assembly and is replaced on the host by `tests/mocks/mock_asm.c`, so no
+host test can see whether a task's floating-point registers survive a
+switch. It is verified on target by the target FPU-context probe (two
+FP-using tasks): each task fills S0–S31 with its own pattern, spins until
+it has been switched out, and counts the registers that changed. Before
+the fix the probe saw about 9,000 changed registers in 30 s; after it,
+none in about 28,000 rounds (120 s), with no missed watchdog deadlines.
+Pass criterion: zero changed registers.
 
 The USB callbacks that drive the transmit ring on DTR changes, link loss
 and bus resume are not built on the host; the ring functions they call

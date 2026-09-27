@@ -26,7 +26,7 @@
 | 0.2 | 2026-04-01 | Souham Biswas | Added MPU protection architecture (§4.2), DTCM/ITCM placement, SVC call-gate dispatch model |
 | 0.3 | 2026-04-11 | Souham Biswas | Added shared service modules (CDC RX, event ring, CRC16, internal filesystem, table engine) to the component summary; SVC count grew 40 → 57; HW CRC peripheral integration noted; tbl_activate priv↔thread split documented |
 | 0.4 | 2026-06-15 | Souham Biswas | Added Software Bus and Background Checksum modules (§3.10.8, §3.10.9); SVC count grew 57 → 63; new RTOS primitives (restart, timed sem, wider pipes, task diagnostics); new BSP modules (IWDG, button, CDC write) |
-| 0.5 | 2026-09-27 | Souham Biswas | v0.5.0: USB CDC transmit ring and console retarget (§3.11) replace the CDC busy-retry write and the putchar line buffers, with discard on port close and reopen and restart on bus resume; §3.7 print buffer marked superseded; ROM bootloader entry (§3.12); SVC caller-buffer validation with main-stack exclusion and its static check (§4.2.8) and SVC wrapper rules (§4.2.9); MPU table corrected and region 8 (backup SRAM, non-cacheable) added; SVC count grew 63 → 94 (IDs 0–93, new 86–93); §4.2.5 SVC table corrected to match `svc.h`; SVC ranges for Software Bus (72–77) and Checksum (63–70) corrected; checksum callbacks delivered in thread mode; table engine `tbl_load_at`/`tbl_abort`/`tbl_get_info` and commit gating |
+| 0.5 | 2026-09-27 | Souham Biswas | v0.5.0: USB CDC transmit ring and console retarget (§3.11) replace the CDC busy-retry write and the putchar line buffers, with discard on port close and reopen and restart on bus resume; §3.7 print buffer marked superseded; ROM bootloader entry (§3.12); SVC caller-buffer validation with main-stack exclusion and its static check (§4.2.8) and SVC wrapper rules (§4.2.9); MPU table corrected and region 8 (backup SRAM, non-cacheable) added; SVC count grew 63 → 94 (IDs 0–93, new 86–93); §4.2.5 SVC table corrected to match `svc.h`; SVC ranges for Software Bus (72–77) and Checksum (63–70) corrected; checksum callbacks delivered in thread mode; table engine `tbl_load_at`/`tbl_abort`/`tbl_get_info` and commit gating; context switch saves S16–S31 for tasks with an FP frame and keeps EXC_RETURN per task, cold tasks start with 0xFFFFFFFD (§3.2.4, §3.3, HLR-KRN-016); timed semaphore timeout measured on the system tick (§3.5); SVC 58 dispatch case returns false (§4.2.5) |
 
 ---
 
@@ -284,14 +284,21 @@ High Address (stack_base + stack_size)
 ├─────────────────────────────────────┤
 │           R0                        │ ← stack_pointer points here
 ├─────────────────────────────────────┤
-│      (Software saved: R4-R11)       │ ← Saved on context switch
-├─────────────────────────────────────┤
 │           ...                       │
 │       (Task local variables)        │
 │           ...                       │
 ├─────────────────────────────────────┤
 Low Address (stack_base)
 ```
+
+This is the frame of a task that has never run (built by `os_create_task()`
+and rebuilt by `__os_restart_task()`): the 8-word basic exception frame and
+nothing else. It holds no software-saved registers, so the first switch to
+the task pops no R4–R11 and returns with EXC_RETURN 0xFFFFFFFD (thread
+mode, process stack, basic frame). Once the task has run, each switch away
+from it leaves the hardware frame (basic or extended) and the
+software-saved context below its current stack top, and `stack_pointer`
+then points at the saved R4 (§3.3.4).
 
 #### 3.2.5 Requirements Traceability
 
@@ -311,87 +318,180 @@ Low Address (stack_base)
 
 #### 3.3.1 Design Overview
 
-Context switching is implemented in ARM assembly for Cortex-M7. It uses the PendSV exception (lowest priority) to ensure all other interrupts complete before switching.
+Context switching is implemented in ARM assembly for Cortex-M7
+(`os_yield_pendsv` in `Core/Src/icarus/context_switch.s`, placed in ITCM).
+It uses the PendSV exception (lowest priority) to ensure all other
+interrupts complete before switching. `PendSV_Handler` is a naked
+handler that branches to `os_yield_pendsv`, so LR holds the outgoing
+task's EXC_RETURN on entry.
+
+The switch preserves each task's integer and floating-point register
+context (HLR-KRN-016). The FPU is enabled for all code (CP10/CP11 full
+access in `SystemInit()`), and the kernel does not write FPCCR, so
+automatic FP state preservation and lazy stacking stay at the
+processor's reset settings (both enabled). Once a task has executed an FP
+instruction (CONTROL.FPCA set), every exception taken from it stacks an
+extended frame, and its EXC_RETURN has bit 4 clear.
 
 #### 3.3.2 Context Switch Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                  CONTEXT SWITCH SEQUENCE                     │
+│                  CONTEXT SWITCH SEQUENCE                    │
 ├─────────────────────────────────────────────────────────────┤
-│                                                              │
+│                                                             │
 │  1. TRIGGER (SysTick or os_yield)                           │
 │     └── SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk                 │
-│                                                              │
+│                                                             │
 │  2. PENDSV ENTRY (hardware automatic)                       │
-│     └── Push xPSR, PC, LR, R12, R3-R0 to PSP               │
-│                                                              │
-│  3. SAVE CONTEXT (software - context_switch.s)              │
-│     ├── MRS R0, PSP           // Get process stack pointer  │
-│     ├── STMDB R0!, {R4-R11}   // Push R4-R11               │
-│     └── Store R0 to current_task->stack_pointer            │
-│                                                              │
-│  4. SELECT NEXT TASK (C code)                               │
-│     └── Round-robin selection, wake blocked tasks          │
-│                                                              │
-│  5. RESTORE CONTEXT (software - context_switch.s)           │
-│     ├── Load R0 from next_task->stack_pointer              │
-│     ├── LDMIA R0!, {R4-R11}   // Pop R4-R11                │
-│     └── MSR PSP, R0           // Set process stack pointer  │
-│                                                              │
+│     ├── Push xPSR, PC, LR, R12, R3-R0 to PSP                │
+│     ├── FP task (CONTROL.FPCA = 1): also reserve S0-S15,    │
+│     │   FPSCR (extended frame, written lazily)              │
+│     └── LR = EXC_RETURN (bit 4 = 0 for an extended frame)   │
+│                                                             │
+│  3. SAVE CONTEXT (os_yield_pendsv)                          │
+│     ├── MRS R0, PSP                                         │
+│     ├── EXC_RETURN bit 4 = 0: VSTMDB R0!, {S16-S31}         │
+│     │   (also completes the pending lazy save of S0-S15)    │
+│     ├── STMDB R0!, {R4-R11, LR}   // LR = EXC_RETURN        │
+│     └── Store R0 to current_task->stack_pointer             │
+│                                                             │
+│  4. SELECT NEXT TASK (assembly, round-robin)                │
+│     ├── Skip KILLED/FINISHED, wake expired BLOCKED tasks    │
+│     └── MPU_ConfigureTaskData(next task's data region)      │
+│                                                             │
+│  5. RESTORE CONTEXT (os_yield_pendsv)                       │
+│     ├── Load R1 from next_task->stack_pointer               │
+│     ├── Warm task: LDMIA R1!, {R4-R11, LR}                  │
+│     │   EXC_RETURN bit 4 = 0: VLDMIA R1!, {S16-S31}         │
+│     ├── Cold task: LR = 0xFFFFFFFD (basic frame)            │
+│     └── MSR PSP, R1; BX LR                                  │
+│                                                             │
 │  6. PENDSV EXIT (hardware automatic)                        │
-│     └── Pop R0-R3, R12, LR, PC, xPSR from PSP              │
-│                                                              │
+│     └── Pop R0-R3, R12, LR, PC, xPSR (and S0-S15, FPSCR     │
+│         for an extended frame) from PSP                     │
+│                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 #### 3.3.3 Assembly Implementation
 
 ```asm
-// context_switch.s (simplified)
+/* context_switch.s, os_yield_pendsv (excerpt; task selection omitted) */
 .syntax unified
+.cpu cortex-m7
+.fpu fpv5-d16
 .thumb
 
-.global context_switch
-.type context_switch, %function
+os_yield_pendsv:
+    /* Save the outgoing task's context */
+    mrs      r0, psp
+    tst      lr, #0x10               /* EXC_RETURN bit 4 clear: FP frame */
+    it       eq
+    vstmdbeq r0!, {s16-s31}          /* S16-S31, FP tasks only */
+    stmdb    r0!, {r4-r11, lr}       /* R4-R11 and EXC_RETURN */
+    /* ... store r0 to the current TCB's stack_pointer (offset 12),
+     *     choose the next task (r11 = its TCB) ... */
 
-context_switch:
-    // Save current context
-    MRS     R0, PSP                 // Get current PSP
-    STMDB   R0!, {R4-R11}          // Save R4-R11
-    
-    // Store stack pointer to current task
-    LDR     R1, =current_task_index
-    LDRB    R1, [R1]
-    LDR     R2, =task_list
-    LDR     R2, [R2, R1, LSL #2]   // task_list[current_task_index]
-    STR     R0, [R2, #12]          // task->stack_pointer (offset 12)
-    
-    // Call scheduler to select next task
-    PUSH    {LR}
-    BL      schedule_next_task
-    POP     {LR}
-    
-    // Load next task context
-    LDR     R1, =current_task_index
-    LDRB    R1, [R1]
-    LDR     R2, =task_list
-    LDR     R2, [R2, R1, LSL #2]
-    LDR     R0, [R2, #12]          // next_task->stack_pointer
-    
-    LDMIA   R0!, {R4-R11}          // Restore R4-R11
-    MSR     PSP, R0                 // Set PSP
-    
-    BX      LR                      // Return (hardware restores rest)
+yield_postprocess:
+    push     {r0-r3, r12, lr}
+    ldr      r0, [r11, #TCB_DATA_PTR]
+    bl       MPU_ConfigureTaskData   /* MPU region for the next task */
+    pop      {r0-r3, r12, lr}
+    ldr      r1, [r11, #TCB_STACK_PTR]
+    /* ... mark it RUNNING; a COLD task branches to
+     *     increment_running_count ... */
+
+    /* Warm task: restore its context */
+    ldmia    r1!, {r4-r11, lr}       /* R4-R11 and its own EXC_RETURN */
+    tst      lr, #0x10
+    it       eq
+    vldmiaeq r1!, {s16-s31}          /* S16-S31, FP tasks only */
+
+branch_to_next_task:
+    msr      psp, r1
+    bx       lr                      /* hardware unstacks the frame type
+                                        recorded in EXC_RETURN */
+
+increment_running_count:
+    /* ... running_task_count++ ... */
+    ldr      lr, =0xFFFFFFFD         /* cold frame is basic: thread mode,
+                                        PSP, no FP state */
+    b        branch_to_next_task
 ```
 
-#### 3.3.4 Requirements Traceability
+#### 3.3.4 Saved Context and Floating-Point State (v0.5.0)
+
+A task that has been switched out holds its context on its own stack,
+lowest address first:
+
+| Order | Contents | Words | Saved by | Present |
+|-------|----------|------:|----------|---------|
+| 1 (at `stack_pointer`) | R4–R11, EXC_RETURN | 9 | `stmdb` in `os_yield_pendsv` | Every task switched out |
+| 2 | S16–S31 | 16 | `vstmdb` in `os_yield_pendsv` | Only when EXC_RETURN bit 4 = 0 |
+| 3 (PSP at PendSV entry) | R0–R3, R12, LR, PC, xPSR (basic frame) | 8 | Hardware, on exception entry | Always |
+| 4 | S0–S15, FPSCR, reserved word | 18 | Hardware, on exception entry (lazy stacking: space reserved at entry, registers written on the first FP instruction in the handler) | Only when EXC_RETURN bit 4 = 0 |
+
+```
+High address
+┌─────────────────────────────────────┐
+│  reserved, FPSCR, S15 ... S0        │ ← extended frame only (bit 4 = 0)
+├─────────────────────────────────────┤
+│  xPSR, PC, LR, R12, R3, R2, R1, R0  │ ← basic frame, always
+├─────────────────────────────────────┤ ← PSP at PendSV entry (frame[0])
+│  S31 ... S16                        │ ← software, FP frame only
+├─────────────────────────────────────┤
+│  EXC_RETURN, R11 ... R4             │ ← software, every warm task
+└─────────────────────────────────────┘ ← task->stack_pointer (R4)
+Low address
+```
+
+- **EXC_RETURN per task.** EXC_RETURN is saved with R4–R11 and restored
+  from the incoming task's own stack, so each task returns with the
+  frame type it was switched out with. Before v0.5.0 the switch saved
+  only R4–R11 and returned with the outgoing task's EXC_RETURN: a task
+  could resume with another task's S0–S31 and FPSCR, or the hardware
+  could unstack the wrong frame type.
+- **S16–S31 in software.** The hardware frame holds only S0–S15 and
+  FPSCR. The switch saves and restores S16–S31 only for tasks whose
+  EXC_RETURN shows an extended frame; a task that has never used the FPU
+  costs only the extra EXC_RETURN word.
+- **Cold tasks.** A task that has never run, or was restarted by
+  `__os_restart_task()`, has only the basic frame built by
+  `os_create_task()` (§3.2.4). The switch pops nothing for it and loads
+  LR with 0xFFFFFFFD (thread mode, PSP, basic frame), whatever frame type
+  the outgoing task had. The first task is launched by `start_cold_task`
+  from `os_start()` and does not take this path.
+- **Lazy stacking before the MPU reprogram.** With lazy stacking the
+  hardware only reserves space for S0–S15 and FPSCR at exception entry.
+  `vstmdb` is an FP instruction, so when the outgoing task has an FP
+  frame it first completes that pending save into the outgoing task's
+  frame. It is the first thing the switch does, before
+  `MPU_ConfigureTaskData()` reprograms the MPU for the next task.
+- **Frame offsets unchanged.** The basic frame is at the bottom of either
+  frame type, so frame[0..7] (R0 … PC, xPSR) keep their offsets whether
+  or not the task uses the FPU. The SVC dispatcher reads the caller's PC
+  at frame[6] to find the SVC number and compares the frame address with
+  PSP to classify the caller (§4.2.8), and the MemManage handler reads
+  and advances the stacked PC at frame[6] (§4.2.6); both work unchanged
+  with an extended frame.
+- **Stack cost.** A switched-out task that has used the FPU holds
+  9 + 16 + 26 = 51 words (204 bytes) of context on its stack, against
+  9 + 8 = 17 words (68 bytes) for one that has not, plus any alignment
+  word the hardware adds to the frame.
+- **Verification.** Host tests cannot exercise the switch:
+  `context_switch.s` is replaced on the host by `tests/mocks/mock_asm.c`.
+  It is verified on target by the target FPU-context probe (two FP-using
+  tasks), see SVP §4.7 and `test_traceability.md` §5.
+
+#### 3.3.5 Requirements Traceability
 
 | Design Element | Implements Requirement |
 |----------------|----------------------|
 | PendSV mechanism | HLR-BSP-004 |
 | PSP usage | HLR-KRN-003 (stack isolation) |
 | Register save/restore | HLR-KRN-010 (preemption) |
+| S16–S31 saved when EXC_RETURN bit 4 = 0; EXC_RETURN kept per task; cold tasks start with 0xFFFFFFFD | HLR-KRN-016 |
 
 ---
 
@@ -498,7 +598,48 @@ semaphore_consume(semaphore_idx):
     count--
     EXIT_CRITICAL
     RETURN true
+
+
+ALGORITHM: Timed Semaphore Consume (v0.4; timeout on the tick since v0.5.0)
+
+INPUT: semaphore_idx, max_ticks
+OUTPUT: true when acquired, false on timeout or invalid index
+
+semaphore_consume_timeout(semaphore_idx, max_ticks):
+    IF semaphore_idx >= MAX_SEMAPHORES:
+        RETURN false
+    
+    start = os_get_tick_count()
+    WHILE NOT sem_can_consume(semaphore_idx):         // SVC 30
+        IF (os_get_tick_count() - start) >= max_ticks:  // unsigned: wrap-safe
+            RETURN false                               // max_ticks == 0: try once
+        task_active_sleep(1)
+    
+    sem_decrement(semaphore_idx)                       // SVC 34
+    RETURN true
 ```
+
+The timed consume runs in the calling task's thread mode:
+`semaphore_consume_timeout()` calls `__semaphore_consume_timeout()`
+directly, and the loop reaches kernel state only through the SVC
+wrappers for the tick count, the sleep, `sem_can_consume()` and
+`sem_decrement()`. SVC 58 is not used (§4.2.5). The host build also
+rejects a semaphore that is not engaged before the loop.
+
+The timeout is measured on the system tick, not by counting sleeps. A
+`task_active_sleep(1)` lasts until the scheduler next runs the waiter,
+which is a whole round of the other ready tasks' time slices when they
+are busy. Up to v0.4 the loop counted iterations, which stretched the
+timeout by that factor: with two CPU-bound tasks using their 50-tick
+slices, a 1000-tick timeout took about 100 s. The unsigned difference
+`now - start` stays correct across a tick-counter wrap. Elapsed time is
+checked each time the waiter runs, so the call returns false once at
+least `max_ticks` have elapsed, up to one scheduling round later.
+
+On the host, where no other task runs, `__sched_host_set_ticks_per_sleep()`
+(`scheduler.h`, HOST_TEST only) makes each `task_active_sleep()` advance
+the tick by a set amount, standing in for the other tasks' slices; the
+default 0 keeps the tick still.
 
 #### 3.5.4 Blocking Behavior
 
@@ -508,6 +649,9 @@ semaphore_consume(semaphore_idx):
 | Feed when count >= init_count | Block until consumer decrements |
 | Consume when count > 0 | Immediate decrement |
 | Consume when count == 0 | Block until producer increments |
+| Timed consume when count > 0 | Immediate decrement, no sleep |
+| Timed consume when count == 0 | Block until producer increments, or return false once at least `max_ticks` system ticks have elapsed since the call |
+| Timed consume with `max_ticks` == 0 | Check once; decrement or return false without sleeping |
 
 The blocking uses `task_active_sleep(1)` which yields to the scheduler, allowing other tasks to run. This is cooperative blocking, not busy-waiting.
 
@@ -521,6 +665,8 @@ The blocking uses `task_active_sleep(1)` which yields to the scheduler, allowing
 | task_active_sleep blocking | HLR-KRN-049 (bounded WCET) |
 | engaged flag | Initialization safety |
 | MAX_SEMAPHORES=32 | HLR-KRN-051 |
+| `semaphore_consume_timeout()`; `max_ticks` == 0 is a try | HLR-KRN-098 |
+| Timeout measured on the system tick (wrap-safe unsigned difference) | HLR-KRN-098.1 |
 
 ---
 
@@ -1086,7 +1232,7 @@ cs_check_all()                               (thread mode)
 | `sb_init` / `sb_subscribe` / `sb_publish` | HLR-KRN-095 |
 | `cs_init` / `cs_add_region` / `cs_check_all` | HLR-KRN-096 |
 | `os_restart_task` | HLR-KRN-097 |
-| `semaphore_consume_timeout` | HLR-KRN-098 |
+| `semaphore_consume_timeout` (thread mode; timeout measured on the system tick since v0.5, §3.5.3) | HLR-KRN-098, HLR-KRN-098.1 |
 | `dispatch_count` / `stack_watermark` / `os_get_task_state` | HLR-KRN-099 |
 | `IWDG_Init` / `IWDG_Refresh` / `IWDG_WasReset` | HLR-BSP-025 |
 | `Button_IsPressed` | HLR-BSP-026 |
@@ -1503,6 +1649,14 @@ restart, 58 timed semaphore, 59–62 task diagnostics, 63–70 checksum monitor,
 72–77 Software Bus, 78–85 filesystem. The spin-loop helpers and the
 v0.5.0 additions are listed below.
 
+SVC 58 (`SVC_SEMAPHORE_CONSUME_TIMEOUT`) keeps its number in `svc.h`, but
+since v0.5.0 its dispatch case does not run the timed wait: it returns
+false. The wait sleeps and reads the tick through SVC wrappers, so run
+inside the handler it would issue nested SVCs (a HardFault on target).
+`semaphore_consume_timeout()` never issues SVC 58; it calls
+`__semaphore_consume_timeout()` directly in thread mode (§3.5.3). Only a
+caller that issues SVC 58 by hand reaches the case, and it gets false.
+
 | SVC # | Function | Purpose | Implements |
 |-------|----------|---------|------------|
 | 29 | `SVC_SEM_CAN_FEED` | Check if semaphore can accept a feed | HLR-KRN-067 |
@@ -1516,6 +1670,7 @@ v0.5.0 additions are listed below.
 | 37 | `SVC_GET_TASK_NAME` | Get a task's name | HLR-KRN-067 |
 | 38 | `SVC_GET_NUM_TASKS` | Get created-task count | HLR-KRN-067 |
 | 39 | `SVC_OS_IS_RUNNING` | Check if the OS is running | HLR-KRN-067 |
+| 58 | `SVC_SEMAPHORE_CONSUME_TIMEOUT` | Returns false when issued directly; the wrapper does not use it and runs the timed wait in thread mode *(changed v0.5.0)* | HLR-KRN-098 |
 | 86 | `SVC_BKPRAM_READ` | Copy backup SRAM to the caller *(v0.5.0)* | HLR-KRN-078 |
 | 87 | `SVC_TBL_GET_INFO` | Copy a table descriptor and state out *(v0.5.0)* | HLR-KRN-094.6 |
 | 88 | `SVC_TBL_ABORT` | Discard staged table bytes *(v0.5.0)* | HLR-KRN-094.5 |
@@ -1852,6 +2007,7 @@ This matrix traces each requirement to its design element(s).
 | HLR-KRN-013 | os_yield() | 5.1 | ✅ |
 | HLR-KRN-014 | task_t.task_priority | 3.2.2 | 🔲 Planned |
 | HLR-KRN-015 | ipc_sem_t.original_priority | 3.6.4 | 🔲 Planned |
+| HLR-KRN-016 | `os_yield_pendsv`: S16–S31 and EXC_RETURN saved per task, cold-task EXC_RETURN 0xFFFFFFFD | 3.3.4 | ✅ |
 | HLR-KRN-020 | os_tick_count | 3.1 | ✅ |
 | HLR-KRN-021 | task_active_sleep() | 5.1 | ✅ |
 | HLR-KRN-022 | task_blocking_sleep() | 5.1 | ✅ |
@@ -1902,6 +2058,8 @@ This matrix traces each requirement to its design element(s).
 | HLR-KRN-094.6 | `tbl_get_info` (SVC 87) | 3.10.5 | ✅ |
 | HLR-KRN-094.7 | Commit gated on `prepared` | 3.10.5 | ✅ |
 | HLR-KRN-096.2 | Thread-mode callback delivery | 3.10.9 | ✅ |
+| HLR-KRN-098 | `semaphore_consume_timeout()` in thread mode; SVC 58 case returns false | 3.5.3, 4.2.5 | ✅ |
+| HLR-KRN-098.1 | Timeout measured on the system tick (wrap-safe) | 3.5.3 | ✅ |
 
 #### 6.1.2 BSP Requirements
 
@@ -1957,9 +2115,9 @@ This matrix traces each requirement to its design element(s).
 |----------------|-------------|-----------------|
 | Scheduler | `icarus/scheduler.c` | SysTick-driven scheduling, `schedule_next_task` |
 | Task Manager | `icarus/task.c` | os_create_task, os_kill_process |
-| Context Switch | `icarus/context_switch.s` | context_switch, start_cold_task |
+| Context Switch | `icarus/context_switch.s` | os_yield_pendsv, start_cold_task |
 | Critical Section | `icarus/kernel.c` | `__enter_critical` / `__exit_critical` (via SVC) |
-| Semaphores | `icarus/semaphore.c` | semaphore_init, semaphore_feed, semaphore_consume |
+| Semaphores | `icarus/semaphore.c` | semaphore_init, semaphore_feed, semaphore_consume, `__semaphore_consume_timeout` |
 | Message Pipes | `icarus/pipe.c` | pipe_init, pipe_enqueue, pipe_dequeue |
 | Print Buffer | — | Removed from the source before v0.2.0; its documentation entry is retired in v0.5.0 (see §3.7, §3.11) |
 | USB CDC transmit ring | `bsp/cdc.c`, `USB_DEVICE/App/usbd_cdc_if.c`, `USB_DEVICE/Target/usbd_conf.c` | cdc_tx_write, CDC_Write, CDC_WriteString, `__cdc_tx_write`, `__cdc_tx_on_complete`, `__cdc_tx_on_link_reset`, `__cdc_tx_kick`, `__cdc_tx_on_dtr`, `__cdc_tx_discard_queued`; callers `CDC_Init_FS`, `CDC_DeInit_FS`, `CDC_Control_FS`, `CDC_TransmitCplt_FS`, `HAL_PCD_ResumeCallback` |
@@ -1979,16 +2137,16 @@ This matrix covers High-Level Requirements (HLR) only. Performance (PRF) and Saf
 
 | Category | Total HLR | Designed | Implemented | Coverage |
 |----------|-----------|----------|-------------|----------|
-| Kernel | 110 | 110 | 105 | 95% |
+| Kernel | 111 | 111 | 106 | 95% |
 | BSP | 30 | 30 | 26 | 87% |
 | AI Runtime | 24 | 24 | 0 | 0% |
-| **Total** | **164** | **164** | **131** | **80%** |
+| **Total** | **165** | **165** | **132** | **80%** |
 
 > v0.5: counted with the SRS §7.2 convention (every HLR row, each
 > sub-requirement separately). "Coverage" is Implemented ÷ Total HLR.
 > "Designed" equals "Total HLR" by convention: every row is counted as
-> designed. Not every row is traced by ID in this document: 35 of the
-> 140 kernel and BSP rows appear nowhere in it. Of these, 21 are
+> designed. Not every row is traced by ID in this document: 34 of the
+> 141 kernel and BSP rows appear nowhere in it. Of these, 20 are
 > sub-requirements of the shared service modules (§3.10) and the v0.4
 > primitives whose parent requirement is traced; the other 14 are the
 > kernel rows KRN-062, KRN-068, KRN-069, KRN-072, KRN-073, KRN-080,

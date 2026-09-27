@@ -75,7 +75,7 @@ The following memory protection features have been implemented and documented:
    - Kernel services are invoked from unprivileged code via SVC (94 SVC IDs, 0–93, see `svc.h`)
    - IDs 29–39 cover atomic DTCM read/write helpers (`sem_can_*`, `pipe_can_*`, etc.)
    - IDs 40–56 are the v0.3.0 shared service module gates (cdc_rx, event, tables — see SDD §3.10)
-   - IDs 57–85 cover task restart (57), the timed semaphore (58), task diagnostics (59–62), checksum monitor, backup SRAM write, Software Bus and filesystem; IDs 86–93 are the v0.5.0 additions (SDD §4.2.5)
+   - IDs 57–85 cover task restart (57), the timed semaphore (58; since v0.5.0 its dispatch case returns false, as `semaphore_consume_timeout()` runs the wait in thread mode without it), task diagnostics (59–62), checksum monitor, backup SRAM write, Software Bus and filesystem; IDs 86–93 are the v0.5.0 additions (SDD §4.2.5)
    - Every caller buffer is checked against an allowlist before a privileged copy (HLR-KRN-074, SDD §4.2.8)
    - Controlled transition between privilege levels
 
@@ -109,8 +109,9 @@ See `design/SDD.md` §3.10 for the per-module design and
 
 ## Recent updates (v0.5.0 robustness release)
 
-Each change below is guarded by a host test or a static check; most
-were first seen failing on target hardware.
+Each change below is guarded by a host test or a static check, except
+the context-switch fix, which host tests cannot observe and which is
+verified on target; most were first seen failing on target hardware.
 
 | Area | Requirements | Design | Verified by |
 |---|---|---|---|
@@ -121,6 +122,8 @@ were first seen failing on target hardware.
 | Checksum callbacks delivered in thread mode | HLR-KRN-096.2 | SDD §3.10.9 | `test_svc_guard.c` |
 | Tables: `tbl_load_at`, `tbl_abort`, `tbl_get_info`, commit gating; CRC via SVC; CDC RX drop counter | HLR-KRN-094.4 to 094.7, HLR-KRN-092.3, HLR-KRN-090.3 | SDD §3.10 | `test_tables_load.c` |
 | ROM bootloader entry (SVC 90) | HLR-BSP-029 | SDD §3.12 | Target integration test |
+| Context switch keeps floating-point state: S16–S31 saved for tasks with an FP frame, EXC_RETURN kept per task, cold tasks start with 0xFFFFFFFD | HLR-KRN-016 | SDD §3.3 | Target FPU-context probe (two FP-using tasks); see `verification/test_traceability.md` §5 |
+| Timed semaphore timeout measured on the system tick, not in sleeps; SVC 58 dispatch case returns false | HLR-KRN-098, HLR-KRN-098.1 | SDD §3.5, §4.2.5 | `test_task.c` (2 timed-consume tests) |
 
 On the transmit ring, port close and reopen are exercised on hardware
 (the device keeps working across a 30 s close and reopen), but the

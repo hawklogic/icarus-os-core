@@ -26,7 +26,7 @@
 | 0.2 | 2026-04-01 | Souham Biswas | Added 14 memory protection requirements (HLR-KRN-063 to HLR-KRN-086) |
 | 0.3 | 2026-04-11 | Souham Biswas | Added 5 shared service module requirements (HLR-KRN-090 to HLR-KRN-094): CDC RX ring buffer, event ring + squelch, CRC16 helper, internal filesystem, ground-loadable table engine |
 | 0.4 | 2026-06-15 | Souham Biswas | Added Software Bus (HLR-KRN-095), Background Checksum (HLR-KRN-096), task restart (HLR-KRN-097), timed semaphore (HLR-KRN-098), wider pipes (HLR-KRN-053 updated), task diagnostics (HLR-KRN-099), BSP watchdog/button/CDC write (HLR-BSP-025 to HLR-BSP-027) |
-| 0.5 | 2026-09-27 | Souham Biswas | v0.5.0: HLR-BSP-027 rewritten for the shared non-blocking USB CDC transmit ring (HLR-BSP-027.1 to HLR-BSP-027.7, including discard on port close and reopen); console retarget with partial writes and drop counter (HLR-BSP-028) replaces putchar line buffering; ROM bootloader entry (HLR-BSP-029); SVC caller-buffer validation, main-stack exclusion and pointer-check static check (HLR-KRN-074); SVC wrapper rules (HLR-KRN-075 to HLR-KRN-077); backup SRAM gates and MPU region (HLR-KRN-078); CDC RX drop counter (HLR-KRN-090.3); CRC via SVC (HLR-KRN-092.3); offset table load, abort, info and commit gating (HLR-KRN-094.4 to HLR-KRN-094.7); HLR-KRN-096.2 (callbacks in thread mode) and HLR-BSP-026 (K1 pressed level) corrected; §7.2 recounted |
+| 0.5 | 2026-09-27 | Souham Biswas | v0.5.0: HLR-BSP-027 rewritten for the shared non-blocking USB CDC transmit ring (HLR-BSP-027.1 to HLR-BSP-027.7, including discard on port close and reopen); console retarget with partial writes and drop counter (HLR-BSP-028) replaces putchar line buffering; ROM bootloader entry (HLR-BSP-029); SVC caller-buffer validation, main-stack exclusion and pointer-check static check (HLR-KRN-074); SVC wrapper rules (HLR-KRN-075 to HLR-KRN-077); backup SRAM gates and MPU region (HLR-KRN-078); CDC RX drop counter (HLR-KRN-090.3); CRC via SVC (HLR-KRN-092.3); offset table load, abort, info and commit gating (HLR-KRN-094.4 to HLR-KRN-094.7); HLR-KRN-096.2 (callbacks in thread mode) and HLR-BSP-026 (K1 pressed level) corrected; floating-point context preserved across task switches (HLR-KRN-016); HLR-KRN-098.1 timeout counted in elapsed system ticks, not scheduling rounds; `semaphore_consume_timeout` added to §5.1; §7.2 recounted |
 
 ---
 
@@ -97,6 +97,7 @@ The following system-level requirements are allocated to ICARUS OS:
 | HLR-KRN-013 | The kernel shall support voluntary yield by tasks | Must | ✅ Implemented |
 | HLR-KRN-014 | The kernel shall support priority-based scheduling | Should | Planned |
 | HLR-KRN-015 | The kernel shall prevent priority inversion | Should | Planned |
+| HLR-KRN-016 | A task switch shall preserve each task's full register context, including its floating-point state: R4–R11 and the task's own EXC_RETURN for every task switched out, and, when that EXC_RETURN shows an extended (FP) frame (bit 4 clear), S16–S31 in software and S0–S15 and FPSCR in the hardware frame, so that a task resumes with its own S0–S31 and FPSCR and the frame type it was switched out with. A task that has never run shall start with EXC_RETURN 0xFFFFFFFD (thread mode, process stack, basic frame) | Must | ✅ Implemented |
 
 #### 3.1.3 Timing Services
 
@@ -228,7 +229,7 @@ the detailed design.
 | HLR-KRN-097 | The kernel shall provide os_restart_task(task_index) to cold-restart a killed or finished task in-place from its original entry point without allocating a new stack slot | Must | ✅ Implemented |
 | HLR-KRN-097.1 | os_restart_task shall only accept tasks in TASK_STATE_KILLED or TASK_STATE_FINISHED; the restarted task shall enter the scheduler as TASK_STATE_COLD | Must | ✅ Implemented |
 | HLR-KRN-098 | The kernel shall provide semaphore_consume_timeout(idx, max_ticks) for timed semaphore acquisition; 0 max_ticks shall be a non-blocking try | Must | ✅ Implemented |
-| HLR-KRN-098.1 | semaphore_consume_timeout shall return false if the semaphore is not acquired within max_ticks | Must | ✅ Implemented |
+| HLR-KRN-098.1 | semaphore_consume_timeout shall return false if the semaphore is not acquired within max_ticks, where max_ticks counts system ticks elapsed since the call (measured on the tick counter, correct across a counter wrap), not the number of times the waiting task is scheduled. The elapsed time is checked each time the waiting task runs, so the call returns false once at least max_ticks have elapsed | Must | ✅ Implemented |
 | HLR-KRN-099 | The kernel shall provide per-task diagnostic fields: dispatch_count (scheduling counter) and stack_watermark (minimum free stack words using 0xDEADC0DE sentinel) | Must | ✅ Implemented |
 | HLR-KRN-099.1 | os_get_task_state(task_index) shall return the current task state via an SVC-gated query | Must | ✅ Implemented |
 | HLR-KRN-099.2 | os_update_stack_watermark(task_index) shall scan the task stack for the sentinel pattern and update the watermark field in the TCB | Must | ✅ Implemented |
@@ -413,6 +414,7 @@ const char* os_get_current_task_name(void);
 bool semaphore_init(uint8_t semaphore_idx, uint32_t semaphore_count);
 bool semaphore_feed(uint8_t semaphore_idx);
 bool semaphore_consume(uint8_t semaphore_idx);
+bool semaphore_consume_timeout(uint8_t semaphore_idx, uint32_t max_ticks);  // HLR-KRN-098
 uint32_t semaphore_get_count(uint8_t semaphore_idx);
 uint32_t semaphore_get_max_count(uint8_t semaphore_idx);
 
@@ -521,12 +523,12 @@ See `ICARUS-VER-003 Test Traceability Matrix` for complete mapping.
 
 | Category | Total | Implemented | Planned |
 |----------|-------|-------------|---------|
-| Kernel (KRN) | 110 | 105 | 5 |
+| Kernel (KRN) | 111 | 106 | 5 |
 | BSP | 30 | 26 | 4 |
 | AI Runtime | 24 | 0 | 24 |
 | Performance | 20 | 14 | 6 |
 | Safety | 9 | 1 | 8 |
-| **Total** | **193** | **146** | **47** |
+| **Total** | **194** | **147** | **47** |
 
 > Counting convention (v0.5): every table row in §3, §4 and §6 that
 > carries a requirement ID is one requirement, and each sub-requirement
@@ -536,7 +538,8 @@ See `ICARUS-VER-003 Test Traceability Matrix` for complete mapping.
 > twice. The previous totals did not follow a stated convention and are
 > superseded.
 >
-> Counts include the v0.5.0 additions: SVC caller-buffer validation
+> Counts include the v0.5.0 additions: floating-point context across
+> task switches (HLR-KRN-016), SVC caller-buffer validation
 > (HLR-KRN-074 to HLR-KRN-074.8), SVC wrapper rules (HLR-KRN-075 to
 > HLR-KRN-077), backup SRAM (HLR-KRN-078), HLR-KRN-090.3,
 > HLR-KRN-092.3, HLR-KRN-094.4 to HLR-KRN-094.7, the USB CDC transmit

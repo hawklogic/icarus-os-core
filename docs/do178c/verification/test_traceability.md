@@ -64,6 +64,8 @@ Requirements (HLR/LLR) → Test Cases → Source Code
 | KRN-043 | System shall enforce bounded semaphore capacity | `test_semaphore_feed_valid` | `semaphore_feed()` |
 | KRN-044 | System shall provide semaphore count query | `test_semaphore_get_count_valid`, `test_semaphore_get_count_invalid` | `semaphore_get_count()` |
 | KRN-045 | System shall provide semaphore max count query | `test_semaphore_get_max_count_valid`, `test_semaphore_get_max_count_invalid` | `semaphore_get_max_count()` |
+| HLR-KRN-098 *(tests v0.5.0)* | Timed consume acquires an available semaphore without sleeping; `max_ticks` == 0 is a non-blocking try | `test_semaphore_consume_timeout_immediate_and_try` | `semaphore_consume_timeout()`, `__semaphore_consume_timeout()` |
+| HLR-KRN-098.1 *(v0.5.0)* | Timed consume returns false once at least `max_ticks` system ticks have elapsed, however many times the waiter was scheduled, and across a tick-counter wrap | `test_semaphore_consume_timeout_counts_elapsed_ticks` (100 ticks per sleep: gives up after 1000–1099 ticks, not 1000 sleeps), `test_semaphore_consume_timeout_immediate_and_try` (500-tick timeout started 256 ticks before the wrap: 500–599 ticks). Both use `__sched_host_set_ticks_per_sleep()` and fail on the v0.4 iteration count (100000 and 50000 ticks elapsed) | `__semaphore_consume_timeout()` |
 
 ### 3.5 Kernel - Message Pipes
 
@@ -276,7 +278,7 @@ Run `cd tests && make test` to obtain current pass/fail results.
 | Kernel - Task Management | 18 |
 | Kernel - Scheduling | 7 |
 | Kernel - Critical Sections | 3 |
-| Kernel - Semaphores | 16 |
+| Kernel - Semaphores *(2 timed-consume tests added v0.5.0)* | 18 |
 | Kernel - Message Pipes | 19 |
 | Kernel - Print Buffer | 5 |
 | Kernel - SVC Dispatch | 11 |
@@ -334,7 +336,8 @@ The following requirements require target integration testing:
 
 | Req ID | Requirement | Reason |
 |--------|-------------|--------|
-| KRN-050 | Context switch shall save/restore registers | ARM assembly code |
+| KRN-050 | Context switch shall save/restore registers | ARM assembly code (see HLR-KRN-016 below for the v0.5.0 floating-point context) |
+| HLR-KRN-016 *(v0.5.0)* | Task switch preserves each task's S0–S31, FPSCR and frame type (S16–S31 and EXC_RETURN saved per task; cold tasks start with 0xFFFFFFFD) | `context_switch.s` is assembly, replaced on the host by `tests/mocks/mock_asm.c`, so no host test can observe it. Verified by the target FPU-context probe (two FP-using tasks): each task fills S0–S31 with its own pattern, spins until it is switched out, then counts registers that changed. Before the fix about 9,000 changed registers in 30 s; after it none in about 28,000 rounds (120 s), with no missed watchdog deadlines. Lazy-stacking completion before the MPU reprogram, per-task EXC_RETURN and the cold-task EXC_RETURN by review |
 | KRN-051 | Idle task shall run when no tasks ready | Infinite loop task |
 | KRN-052 | Heartbeat task shall blink LED | Infinite loop task |
 | KRN-053 | *Retired in v0.5.0:* printf task shall transmit buffered data | The printf task and print buffer were removed; console output goes through the CDC transmit ring (HLR-BSP-027, HLR-BSP-028) |
@@ -364,4 +367,4 @@ The following requirements require target integration testing:
 | 0.1 | 2025-01-26 | Souham Biswas | Initial draft |
 | 0.2 | 2026-04-01 | Souham Biswas | Added SVC tests; updated counts to ~140; reconciled semaphore/pipe test names |
 | 0.3 | 2026-04-11 | Souham Biswas | Added 56 host tests for the v0.3.0 shared modules across `test_crc.c` (8), `test_cdc_rx.c` (7), `test_event.c` (9), `test_fs.c` (16), and `test_tables.c` (16); total bumped 140 → 196 |
-| 0.4 | 2026-09-27 | Souham Biswas | v0.5.0: BSP-030..032 (putchar line buffering) retired and replaced by HLR-BSP-028; added §3.18–§3.23 (checksum callback delivery, SVC caller-buffer validation, SVC wrapper rules, backup SRAM, USB CDC transmit ring, watchdog and K1 button); new rows for HLR-KRN-090.3, 092.3, 094.4–094.7; static checks traced; target-only paths added to §5; per-file test counts (274) |
+| 0.4 | 2026-09-27 | Souham Biswas | v0.5.0: BSP-030..032 (putchar line buffering) retired and replaced by HLR-BSP-028; added §3.18–§3.23 (checksum callback delivery, SVC caller-buffer validation, SVC wrapper rules, backup SRAM, USB CDC transmit ring, watchdog and K1 button); new rows for HLR-KRN-090.3, 092.3, 094.4–094.7; static checks traced; target-only paths added to §5; HLR-KRN-098 and HLR-KRN-098.1 traced to `test_semaphore_consume_timeout_counts_elapsed_ticks` and `test_semaphore_consume_timeout_immediate_and_try` (§3.4); HLR-KRN-016 (floating-point context across task switches) added to §5 with the target FPU-context probe; per-file test counts (274) |

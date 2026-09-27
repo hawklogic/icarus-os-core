@@ -9,7 +9,7 @@
  * @note    This code runs in ITCM for zero wait-state execution.
  *
  * @see     ARMv7-M Architecture Reference Manual
- * @see     docs/do178c/design/SDD.md Section 5.2 - Context Switch
+ * @see     docs/do178c/design/SDD.md Section 3.3 - Context Switch
  *
  * @author  Souham Biswas
  * @date    2026

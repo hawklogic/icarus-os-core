@@ -68,6 +68,13 @@ shared service modules:
 2. **Scheduler** (`scheduler.c/h`) - Task selection and time-slicing
 3. **Task Manager** (`task.c/h`) - Task lifecycle and registration
 4. **Context Switch** (`context_switch.s`) - Low-level task switching
+   (`os_yield_pendsv`, entered from PendSV). Each switched-out task keeps
+   R4–R11 and its own EXC_RETURN on its stack, plus S16–S31 when its
+   EXC_RETURN shows an extended (FP) frame; the hardware frame holds
+   S0–S15 and FPSCR. Saving S16–S31 also completes any pending lazy
+   stacking before the MPU is reprogrammed for the next task, and a task
+   that has never run starts with EXC_RETURN 0xFFFFFFFD (since v0.5.0;
+   verified on target, since the switch is mocked on the host)
 5. **SVC Handler** (`svc.c/h`) - Privilege separation and call gates (94 SVC
    numbers, IDs 0–93). Since v0.5.0 every caller buffer an SVC
    implementation touches is checked against an allowlist first
@@ -84,7 +91,11 @@ shared service modules:
    clobbers `"memory"` (checked by `tools/check_svc_clobbers.py`); both
    checks run in `make -C tests`. Host builds abort on a nested SVC
    (`SVC_HOST_GATE`)
-6. **IPC Manager** (`semaphore.c/h`, `pipe.c/h`) - Inter-process communication
+6. **IPC Manager** (`semaphore.c/h`, `pipe.c/h`) - Inter-process communication.
+   `semaphore_consume_timeout()` runs in the calling task's thread mode
+   and measures its timeout on the system tick (wrap-safe), so a busy
+   system does not stretch it; SVC 58 is not used and its dispatch case
+   returns false (since v0.5.0)
 
 **Shared service modules** (added in v0.3.0, all reachable through
 `#include "icarus/icarus.h"`):
