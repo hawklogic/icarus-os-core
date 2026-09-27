@@ -33,6 +33,7 @@
 #include "icarus/crc.h"
 #include "bsp/mpu.h"
 #include "bsp/bootloader.h"
+#include "bsp/cdc.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -132,32 +133,150 @@ static bool bkpram_range_ok(uint32_t offset, uint32_t len) {
 }
 
 /**
- * @brief  Reject caller buffers that would let a privileged copy read or
- *         write kernel-only memory (privileged DTCM or the backup SRAM).
- * @param[in] addr  Buffer start address.
- * @param[in] len   Buffer length.
- * @retval true   Buffer is non-NULL, does not wrap, and avoids those areas.
+ * @brief  One allowlisted memory region for caller buffers.
  */
-static bool svc_user_buffer_ok(uintptr_t addr, uint32_t len) {
-    if ((addr == 0u) || (len == 0u) ||
-        (addr > (UINTPTR_MAX - (uintptr_t)len))) {
+typedef struct {
+    uintptr_t base;       /**< First byte of the region.               */
+    uint32_t  size;       /**< Region size in bytes.                   */
+    bool      writable;   /**< false: the kernel may only read it.     */
+} svc_region_t;
+
+/**
+ * @brief  Fixed regions an unprivileged task may hand to the kernel.
+ * @details The calling task's data-pool slot is added at run time (it
+ *          changes with the caller).  ITCM starts at address 0, which the
+ *          NULL check already excludes.
+ */
+static const svc_region_t svc_regions[] = {
+    { (uintptr_t)BSP_RAM_D1_BASE,   (uint32_t)BSP_RAM_D1_SIZE,   true  },
+    { (uintptr_t)BSP_DTCM_APP_BASE, (uint32_t)BSP_DTCM_APP_SIZE, true  },
+    { (uintptr_t)BSP_FLASH_BASE,    (uint32_t)BSP_FLASH_SIZE,    false },
+    { (uintptr_t)BSP_ITCM_BASE,     (uint32_t)BSP_ITCM_SIZE,     false },
+};
+
+/**
+ * @brief  Whether [addr, addr + len) lies wholly inside [base, base + size).
+ * @param[in] addr  Range start.
+ * @param[in] len   Range length (> 0).
+ * @param[in] base  Region start.
+ * @param[in] size  Region size.
+ * @retval true  The range is contained in the region.
+ */
+static bool svc_range_inside(uintptr_t addr, uint32_t len,
+                             uintptr_t base, uint32_t size) {
+    if ((size == 0u) || (addr < base)) {
         return false;
     }
+    uintptr_t off = addr - base;
+    return (off < (uintptr_t)size) && ((uintptr_t)len <= ((uintptr_t)size - off));
+}
+
+/** @copydoc svc_buffer_allowed */
+bool svc_buffer_allowed(uintptr_t addr, uint32_t len, svc_access_t access,
+                        uintptr_t slot_base, uint32_t slot_size) {
+    if (addr == 0u) {
+        return false;
+    }
+    if (len == 0u) {
+        return true;
+    }
+    if (addr > (UINTPTR_MAX - (uintptr_t)len)) {
+        return false;                                   /* wraps */
+    }
+    if (svc_range_inside(addr, len, slot_base, slot_size)) {
+        return true;
+    }
+    for (uint32_t i = 0u; i < (uint32_t)(sizeof(svc_regions) / sizeof(svc_regions[0])); i++) {
+        const svc_region_t *r = &svc_regions[i];
+        if ((access == SVC_ACCESS_WRITE) && !r->writable) {
+            continue;
+        }
+        if (svc_range_inside(addr, len, r->base, r->size)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** @copydoc svc_caller_is_privileged */
+bool svc_caller_is_privileged(void) {
 #ifndef HOST_TEST
-    uintptr_t end = addr + (uintptr_t)len;          /* exclusive */
-    uintptr_t priv_lo = (uintptr_t)BSP_DTCM_BASE;
-    uintptr_t priv_hi = (uintptr_t)BSP_DTCM_OBC_BASE;
-    uintptr_t bkp_lo  = (uintptr_t)BSP_BKPSRAM_BASE;
-    uintptr_t bkp_hi  = bkp_lo + (uintptr_t)BSP_BKPSRAM_SIZE;
-    if ((addr < priv_hi) && (end > priv_lo)) {
-        return false;
-    }
-    if ((addr < bkp_hi) && (end > bkp_lo)) {
-        return false;
-    }
+    bool in_handler = (__get_IPSR() != 0u);
+    bool privileged = ((__get_CONTROL() & 0x1u) == 0u);
+    return in_handler || privileged;
+#else
+    return true;
 #endif
+}
+
+/**
+ * @brief  Validate a caller buffer before a privileged copy touches it.
+ * @details On target the calling task's data-pool slot is looked up and
+ *          svc_buffer_allowed() applies the allowlist.  Host addresses are
+ *          not target addresses, so the host build only rejects NULL and
+ *          wrap-around (the policy itself is unit-tested on the host).
+ * @param[in] addr    Buffer start address.
+ * @param[in] len     Buffer length (0 allowed).
+ * @param[in] access  Read or write.
+ * @retval true   The handler may touch the buffer.
+ */
+static bool svc_user_buffer_ok(uintptr_t addr, uint32_t len,
+                               svc_access_t access) {
+#ifndef HOST_TEST
+    uintptr_t slot_base = 0u;
+    uint32_t  slot_size = 0u;
+    __kernel_current_data_slot(&slot_base, &slot_size);
+    return svc_buffer_allowed(addr, len, access, slot_base, slot_size);
+#else
+    (void)access;
+    return (addr != 0u) && ((len == 0u) ||
+                            (addr <= (UINTPTR_MAX - (uintptr_t)len)));
+#endif
+}
+
+#ifndef HOST_TEST
+/**
+ * @brief  svc_user_buffer_ok() for a pointer the implementation accepts as
+ *         NULL (it then skips the buffer): NULL passes, anything else is
+ *         checked.
+ * @param[in] addr    Buffer start address, or 0.
+ * @param[in] len     Buffer length.
+ * @param[in] access  Read or write.
+ * @retval true   NULL, or an allowed buffer.
+ */
+static bool svc_user_opt_buffer_ok(uintptr_t addr, uint32_t len,
+                                   svc_access_t access) {
+    return (addr == 0u) || svc_user_buffer_ok(addr, len, access);
+}
+
+/**
+ * @brief  Validate a NUL-terminated caller string the kernel will read.
+ * @details The implementation reads at most @p max_len bytes and stops at
+ *          the NUL, so each byte is checked before it is inspected: a short
+ *          string that ends right before a region boundary is accepted.
+ * @param[in] addr     String start address.
+ * @param[in] max_len  Most bytes the implementation reads.
+ * @retval true   Every byte the implementation can read is allowed.
+ */
+static bool svc_user_string_ok(uintptr_t addr, uint32_t max_len) {
+    uintptr_t slot_base = 0u;
+    uint32_t  slot_size = 0u;
+    __kernel_current_data_slot(&slot_base, &slot_size);
+    if (addr == 0u) {
+        return false;
+    }
+    for (uint32_t i = 0u; i < max_len; i++) {
+        uintptr_t p = addr + (uintptr_t)i;
+        if (!svc_buffer_allowed(p, 1u, SVC_ACCESS_READ, slot_base, slot_size)) {
+            return false;
+        }
+        if (*(const volatile char *)p == '\0') {
+            return true;
+        }
+    }
     return true;
 }
+#endif /* !HOST_TEST */
 
 /* ============================================================================
  * SVC HANDLER (target only)
@@ -171,6 +290,10 @@ static bool svc_user_buffer_ok(uintptr_t addr, uint32_t len) {
  *
  * @note SVC number is extracted from the SVC instruction encoding:
  *       The SVC instruction is at [PC - 2], and the immediate is the low byte.
+ * @note Every caller-supplied pointer the implementation dereferences is
+ *       checked first (svc_user_buffer_ok() / svc_user_string_ok(), with
+ *       the access the implementation makes).  On a rejected pointer the
+ *       call returns its documented failure value and touches no memory.
  */
 void SVC_Handler_C(uint32_t *stack_frame) {
     uint8_t svc_number = ((uint8_t *)(uintptr_t)stack_frame[6])[-2];
@@ -211,8 +334,12 @@ void SVC_Handler_C(uint32_t *stack_frame) {
 
         /* Task lifecycle */
         case SVC_OS_REGISTER_TASK:
-            __os_register_task((void (*)(void))(uintptr_t)arg0,
-                               (const char *)(uintptr_t)arg1);
+            /* The name is copied (up to ICARUS_MAX_TASK_NAME_LEN bytes). */
+            if (svc_user_string_ok((uintptr_t)arg1,
+                                   (uint32_t)ICARUS_MAX_TASK_NAME_LEN)) {
+                __os_register_task((void (*)(void))(uintptr_t)arg0,
+                                   (const char *)(uintptr_t)arg1);
+            }
             break;
         case SVC_OS_EXIT_TASK:
             __os_exit_task();
@@ -305,14 +432,26 @@ void SVC_Handler_C(uint32_t *stack_frame) {
         case SVC_SEM_DECREMENT:
             __sem_decrement((uint8_t)arg0);
             break;
-        case SVC_PIPE_WRITE_BYTES:
-            __pipe_write_bytes((uint8_t)arg0, (uint8_t *)(uintptr_t)arg1,
-                               (uint8_t)stack_frame[2]);
+        case SVC_PIPE_WRITE_BYTES: {
+            uint8_t n  = (uint8_t)stack_frame[2];
+            bool    ok = false;
+            if (svc_user_buffer_ok((uintptr_t)arg1, n, SVC_ACCESS_READ)) {
+                ok = __pipe_write_bytes((uint8_t)arg0,
+                                        (uint8_t *)(uintptr_t)arg1, n);
+            }
+            stack_frame[0] = (uint32_t)ok;
             break;
-        case SVC_PIPE_READ_BYTES:
-            __pipe_read_bytes((uint8_t)arg0, (uint8_t *)(uintptr_t)arg1,
-                              (uint8_t)stack_frame[2]);
+        }
+        case SVC_PIPE_READ_BYTES: {
+            uint8_t n  = (uint8_t)stack_frame[2];
+            bool    ok = false;
+            if (svc_user_buffer_ok((uintptr_t)arg1, n, SVC_ACCESS_WRITE)) {
+                ok = __pipe_read_bytes((uint8_t)arg0,
+                                       (uint8_t *)(uintptr_t)arg1, n);
+            }
+            stack_frame[0] = (uint32_t)ok;
             break;
+        }
 
         /* Task metadata read gates — for display/diagnostics from unprivileged mode */
         case SVC_GET_TASK_NAME: {
@@ -332,7 +471,10 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             __cdc_rx_init();
             break;
         case SVC_CDC_RX_READ_BYTE: {
-            bool ok = __cdc_rx_read_byte((uint8_t *)(uintptr_t)arg0);
+            bool ok = false;
+            if (svc_user_buffer_ok((uintptr_t)arg0, 1u, SVC_ACCESS_WRITE)) {
+                ok = __cdc_rx_read_byte((uint8_t *)(uintptr_t)arg0);
+            }
             stack_frame[0] = (uint32_t)ok;
             break;
         }
@@ -354,8 +496,14 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             uint16_t event_id    = (uint16_t)((arg0 >> 16) & 0xFFFF);
             const void *payload  = (const void *)(uintptr_t)arg1;
             uint8_t payload_len  = (uint8_t)stack_frame[2];
-            __os_event(module_id, (event_severity_t)severity, event_id,
-                       payload, payload_len);
+            /* The payload is optional and at most 12 bytes are copied; a
+             * disallowed payload pointer drops the event. */
+            uint8_t copy_len = (payload_len > 12u) ? 12u : payload_len;
+            if (svc_user_opt_buffer_ok((uintptr_t)arg1, copy_len,
+                                       SVC_ACCESS_READ)) {
+                __os_event(module_id, (event_severity_t)severity, event_id,
+                           payload, payload_len);
+            }
             break;
         }
         case SVC_EVENT_SET_SQUELCH:
@@ -367,10 +515,21 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             break;
         }
         case SVC_EVENT_DRAIN: {
-            bool ok = __event_drain(
-                (event_entry_t *)(uintptr_t)arg0,
-                (uint8_t)arg1,
-                (uint8_t *)(uintptr_t)stack_frame[2]);
+            /* Both pointers are optional to the implementation (NULL
+             * out_buf reports failure, NULL num_drained is skipped). */
+            uint8_t  max_entries = (uint8_t)arg1;
+            uint32_t out_len = (uint32_t)max_entries *
+                               (uint32_t)sizeof(event_entry_t);
+            bool ok = false;
+            if (svc_user_opt_buffer_ok((uintptr_t)arg0, out_len,
+                                       SVC_ACCESS_WRITE) &&
+                svc_user_opt_buffer_ok((uintptr_t)stack_frame[2], 1u,
+                                       SVC_ACCESS_WRITE)) {
+                ok = __event_drain(
+                    (event_entry_t *)(uintptr_t)arg0,
+                    max_entries,
+                    (uint8_t *)(uintptr_t)stack_frame[2]);
+            }
             stack_frame[0] = (uint32_t)ok;
             break;
         }
@@ -383,42 +542,71 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             __tbl_init();
             break;
         case SVC_TBL_REGISTER: {
-            bool ok = __tbl_register(
-                (const tbl_descriptor_t *)(uintptr_t)arg0);
+            bool ok = false;
+            if (svc_user_buffer_ok((uintptr_t)arg0,
+                                   (uint32_t)sizeof(tbl_descriptor_t),
+                                   SVC_ACCESS_READ)) {
+                ok = __tbl_register(
+                    (const tbl_descriptor_t *)(uintptr_t)arg0);
+            }
             stack_frame[0] = (uint32_t)ok;
             break;
         }
         case SVC_TBL_LOAD: {
-            bool ok = __tbl_load(
-                (tbl_id_t)arg0,
-                (const uint8_t *)(uintptr_t)arg1,
-                (uint16_t)stack_frame[2],
-                (uint16_t)stack_frame[3]);
+            uint16_t len = (uint16_t)stack_frame[2];
+            bool ok = false;
+            if (svc_user_buffer_ok((uintptr_t)arg1, len, SVC_ACCESS_READ)) {
+                ok = __tbl_load(
+                    (tbl_id_t)arg0,
+                    (const uint8_t *)(uintptr_t)arg1,
+                    len,
+                    (uint16_t)stack_frame[3]);
+            }
             stack_frame[0] = (uint32_t)ok;
             break;
         }
         case SVC_TBL_ACTIVATE_PREPARE: {
-            bool ok = __tbl_activate_prepare(
-                (tbl_id_t)arg0,
-                (uint8_t *)(uintptr_t)arg1,
-                (uint16_t *)(uintptr_t)stack_frame[2],
-                (tbl_activate_fn *)(uintptr_t)stack_frame[3]);
+            /* The scratch buffer must hold TBL_MAX_SIZE bytes (the
+             * tbl_activate() wrapper passes exactly that). */
+            bool ok = false;
+            if (svc_user_buffer_ok((uintptr_t)arg1, (uint32_t)TBL_MAX_SIZE,
+                                   SVC_ACCESS_WRITE) &&
+                svc_user_buffer_ok((uintptr_t)stack_frame[2],
+                                   (uint32_t)sizeof(uint16_t),
+                                   SVC_ACCESS_WRITE) &&
+                svc_user_buffer_ok((uintptr_t)stack_frame[3],
+                                   (uint32_t)sizeof(tbl_activate_fn),
+                                   SVC_ACCESS_WRITE)) {
+                ok = __tbl_activate_prepare(
+                    (tbl_id_t)arg0,
+                    (uint8_t *)(uintptr_t)arg1,
+                    (uint16_t *)(uintptr_t)stack_frame[2],
+                    (tbl_activate_fn *)(uintptr_t)stack_frame[3]);
+            }
             stack_frame[0] = (uint32_t)ok;
             break;
         }
         case SVC_TBL_ACTIVATE_COMMIT: {
-            bool ok = __tbl_activate_commit(
-                (tbl_id_t)arg0,
-                (const uint8_t *)(uintptr_t)arg1,
-                (uint16_t)stack_frame[2]);
+            uint16_t len = (uint16_t)stack_frame[2];
+            bool ok = false;
+            if (svc_user_buffer_ok((uintptr_t)arg1, len, SVC_ACCESS_READ)) {
+                ok = __tbl_activate_commit(
+                    (tbl_id_t)arg0,
+                    (const uint8_t *)(uintptr_t)arg1,
+                    len);
+            }
             stack_frame[0] = (uint32_t)ok;
             break;
         }
         case SVC_TBL_DUMP: {
-            int16_t n = __tbl_dump(
-                (tbl_id_t)arg0,
-                (uint8_t *)(uintptr_t)arg1,
-                (uint16_t)stack_frame[2]);
+            uint16_t max = (uint16_t)stack_frame[2];
+            int16_t n = -1;
+            if (svc_user_buffer_ok((uintptr_t)arg1, max, SVC_ACCESS_WRITE)) {
+                n = __tbl_dump(
+                    (tbl_id_t)arg0,
+                    (uint8_t *)(uintptr_t)arg1,
+                    max);
+            }
             stack_frame[0] = (uint32_t)(int32_t)n;
             break;
         }
@@ -467,9 +655,14 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             __cs_set_callback((cs_mismatch_fn)(uintptr_t)arg0);
             break;
         case SVC_CS_ADD_REGION: {
-            bool ok = __cs_add_region((uint8_t)arg0,
-                                       (const uint8_t *)(uintptr_t)arg1,
-                                       stack_frame[2]);
+            /* The region is read now (baseline) and on every later scan. */
+            bool ok = false;
+            if (svc_user_buffer_ok((uintptr_t)arg1, stack_frame[2],
+                                   SVC_ACCESS_READ)) {
+                ok = __cs_add_region((uint8_t)arg0,
+                                     (const uint8_t *)(uintptr_t)arg1,
+                                     stack_frame[2]);
+            }
             stack_frame[0] = (uint32_t)ok;
             break;
         }
@@ -483,13 +676,27 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             stack_frame[0] = (uint32_t)ok;
             break;
         }
-        case SVC_CS_CHECK_ALL:
-            stack_frame[0] = (uint32_t)__cs_check_all(
-                                 (cs_scan_result_t *)(uintptr_t)arg0);
+        case SVC_CS_CHECK_ALL: {
+            /* A disallowed result buffer is ignored: the scan still runs
+             * and the failure count is returned, but nothing is written. */
+            cs_scan_result_t *out = (cs_scan_result_t *)(uintptr_t)arg0;
+            if (!svc_user_opt_buffer_ok((uintptr_t)arg0,
+                                        (uint32_t)sizeof(cs_scan_result_t),
+                                        SVC_ACCESS_WRITE)) {
+                out = NULL;
+            }
+            uint8_t failures = __cs_check_all(out);
+            stack_frame[0] = (uint32_t)failures;
             break;
+        }
         case SVC_CS_GET_REGION: {
-            bool ok = __cs_get_region((uint8_t)arg0,
-                                       (cs_region_t *)(uintptr_t)arg1);
+            bool ok = false;
+            if (svc_user_buffer_ok((uintptr_t)arg1,
+                                   (uint32_t)sizeof(cs_region_t),
+                                   SVC_ACCESS_WRITE)) {
+                ok = __cs_get_region((uint8_t)arg0,
+                                     (cs_region_t *)(uintptr_t)arg1);
+            }
             stack_frame[0] = (uint32_t)ok;
             break;
         }
@@ -502,7 +709,7 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             /* r0 = id | offset << 16, r1 = data, r2 = len, r3 = schema_crc */
             uint16_t len = (uint16_t)stack_frame[2];
             bool ok = false;
-            if (svc_user_buffer_ok((uintptr_t)arg1, len)) {
+            if (svc_user_buffer_ok((uintptr_t)arg1, len, SVC_ACCESS_READ)) {
                 ok = __tbl_load_at((tbl_id_t)(arg0 & 0xFFu),
                                    (uint16_t)(arg0 >> 16),
                                    (const uint8_t *)(uintptr_t)arg1, len,
@@ -518,7 +725,9 @@ void SVC_Handler_C(uint32_t *stack_frame) {
         }
         case SVC_TBL_GET_INFO: {
             bool ok = false;
-            if (svc_user_buffer_ok((uintptr_t)arg1, sizeof(tbl_info_t))) {
+            if (svc_user_buffer_ok((uintptr_t)arg1,
+                                   (uint32_t)sizeof(tbl_info_t),
+                                   SVC_ACCESS_WRITE)) {
                 ok = __tbl_get_info((tbl_id_t)arg0,
                                     (tbl_info_t *)(uintptr_t)arg1);
             }
@@ -535,7 +744,7 @@ void SVC_Handler_C(uint32_t *stack_frame) {
         case SVC_CRC16_CCITT: {
             uint16_t len = (uint16_t)arg1;
             uint16_t crc = 0xFFFFu;
-            if (svc_user_buffer_ok((uintptr_t)arg0, len)) {
+            if (svc_user_buffer_ok((uintptr_t)arg0, len, SVC_ACCESS_READ)) {
                 crc = __crc16_ccitt((const uint8_t *)(uintptr_t)arg0, len);
             }
             stack_frame[0] = (uint32_t)crc;
@@ -554,7 +763,7 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             uint32_t len    = stack_frame[2];
             bool ok = false;
             if (bkpram_range_ok(offset, len) &&
-                svc_user_buffer_ok((uintptr_t)src, len)) {
+                svc_user_buffer_ok((uintptr_t)src, len, SVC_ACCESS_READ)) {
                 (void)memcpy((void *)(BSP_BKPSRAM_BASE + offset), src, len);
                 __DSB();
                 ok = true;
@@ -568,7 +777,7 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             uint32_t len    = stack_frame[2];
             bool ok = false;
             if (bkpram_range_ok(offset, len) &&
-                svc_user_buffer_ok((uintptr_t)dst, len)) {
+                svc_user_buffer_ok((uintptr_t)dst, len, SVC_ACCESS_WRITE)) {
                 (void)memcpy(dst, (const void *)(BSP_BKPSRAM_BASE + offset), len);
                 ok = true;
             }
@@ -591,9 +800,12 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             break;
         }
         case SVC_SB_PUBLISH: {
-            uint8_t n = __sb_publish((sb_msg_id_t)arg0,
-                                     (const uint8_t *)(uintptr_t)arg1,
-                                     (uint8_t)stack_frame[2]);
+            uint8_t len = (uint8_t)stack_frame[2];
+            uint8_t n   = 0u;
+            if (svc_user_buffer_ok((uintptr_t)arg1, len, SVC_ACCESS_READ)) {
+                n = __sb_publish((sb_msg_id_t)arg0,
+                                 (const uint8_t *)(uintptr_t)arg1, len);
+            }
             stack_frame[0] = (uint32_t)n;
             break;
         }
@@ -610,46 +822,100 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             __fs_init();
             break;
         case SVC_FS_CREATE: {
-            bool ok = __fs_create((const char *)(uintptr_t)arg0,
-                                  (fs_file_t *)(uintptr_t)arg1);
+            bool ok = false;
+            if (svc_user_string_ok((uintptr_t)arg0,
+                                   (uint32_t)FS_MAX_NAME_LEN) &&
+                svc_user_buffer_ok((uintptr_t)arg1,
+                                   (uint32_t)sizeof(fs_file_t),
+                                   SVC_ACCESS_WRITE)) {
+                ok = __fs_create((const char *)(uintptr_t)arg0,
+                                 (fs_file_t *)(uintptr_t)arg1);
+            }
             stack_frame[0] = (uint32_t)ok;
             break;
         }
         case SVC_FS_OPEN: {
-            bool ok = __fs_open((const char *)(uintptr_t)arg0,
-                                (fs_file_t *)(uintptr_t)arg1);
+            bool ok = false;
+            if (svc_user_string_ok((uintptr_t)arg0,
+                                   (uint32_t)FS_MAX_NAME_LEN) &&
+                svc_user_buffer_ok((uintptr_t)arg1,
+                                   (uint32_t)sizeof(fs_file_t),
+                                   SVC_ACCESS_WRITE)) {
+                ok = __fs_open((const char *)(uintptr_t)arg0,
+                               (fs_file_t *)(uintptr_t)arg1);
+            }
             stack_frame[0] = (uint32_t)ok;
             break;
         }
         case SVC_FS_WRITE: {
-            bool ok = __fs_write((fs_file_t *)(uintptr_t)arg0,
-                                 (const uint8_t *)(uintptr_t)arg1,
-                                 (uint16_t)stack_frame[2]);
+            uint16_t len = (uint16_t)stack_frame[2];
+            bool ok = false;
+            if (svc_user_buffer_ok((uintptr_t)arg0,
+                                   (uint32_t)sizeof(fs_file_t),
+                                   SVC_ACCESS_READ) &&
+                svc_user_buffer_ok((uintptr_t)arg1, len, SVC_ACCESS_READ)) {
+                ok = __fs_write((fs_file_t *)(uintptr_t)arg0,
+                                (const uint8_t *)(uintptr_t)arg1, len);
+            }
             stack_frame[0] = (uint32_t)ok;
             break;
         }
         case SVC_FS_READ: {
-            uint16_t n = __fs_read((fs_file_t *)(uintptr_t)arg0,
-                                   (uint8_t *)(uintptr_t)arg1,
-                                   (uint16_t)stack_frame[2],
-                                   (uint16_t)stack_frame[3]);
+            uint16_t len = (uint16_t)stack_frame[2];
+            uint16_t n   = 0u;
+            if (svc_user_buffer_ok((uintptr_t)arg0,
+                                   (uint32_t)sizeof(fs_file_t),
+                                   SVC_ACCESS_READ) &&
+                svc_user_buffer_ok((uintptr_t)arg1, len, SVC_ACCESS_WRITE)) {
+                n = __fs_read((fs_file_t *)(uintptr_t)arg0,
+                              (uint8_t *)(uintptr_t)arg1,
+                              len,
+                              (uint16_t)stack_frame[3]);
+            }
             stack_frame[0] = (uint32_t)n;
             break;
         }
         case SVC_FS_DELETE: {
-            bool ok = __fs_delete((const char *)(uintptr_t)arg0);
+            bool ok = false;
+            if (svc_user_string_ok((uintptr_t)arg0,
+                                   (uint32_t)FS_MAX_NAME_LEN)) {
+                ok = __fs_delete((const char *)(uintptr_t)arg0);
+            }
             stack_frame[0] = (uint32_t)ok;
             break;
         }
         case SVC_FS_LIST: {
-            uint8_t n = __fs_list((fs_file_info_t *)(uintptr_t)arg0,
-                                  (uint8_t)arg1);
+            uint8_t max = (uint8_t)arg1;
+            uint8_t n   = 0u;
+            if (svc_user_buffer_ok((uintptr_t)arg0,
+                                   (uint32_t)max *
+                                   (uint32_t)sizeof(fs_file_info_t),
+                                   SVC_ACCESS_WRITE)) {
+                n = __fs_list((fs_file_info_t *)(uintptr_t)arg0, max);
+            }
             stack_frame[0] = (uint32_t)n;
             break;
         }
         case SVC_FS_STATS:
-            __fs_stats((fs_stats_t *)(uintptr_t)arg0);
+            if (svc_user_buffer_ok((uintptr_t)arg0,
+                                   (uint32_t)sizeof(fs_stats_t),
+                                   SVC_ACCESS_WRITE)) {
+                __fs_stats((fs_stats_t *)(uintptr_t)arg0);
+            }
             break;
+
+        /* ---- USB CDC transmit ring ---- */
+        case SVC_CDC_TX_WRITE: {
+            /* r0 = data, r1 = len, r2 = whole (all-or-nothing) */
+            uint16_t len = (uint16_t)arg1;
+            uint16_t n   = 0u;
+            if (svc_user_buffer_ok((uintptr_t)arg0, len, SVC_ACCESS_READ)) {
+                n = __cdc_tx_write((const uint8_t *)(uintptr_t)arg0, len,
+                                   stack_frame[2] != 0u);
+            }
+            stack_frame[0] = (uint32_t)n;
+            break;
+        }
 
         default:
             break;
@@ -1289,21 +1555,24 @@ void sem_decrement(uint8_t semaphore_idx) {
  * @brief Write bytes to pipe buffer atomically in privileged mode
  * @note  Called after pipe_can_enqueue() spin loop exits
  */
-void pipe_write_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes) {
+bool pipe_write_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes) {
 #ifndef HOST_TEST
+    uint32_t result;
     __asm__ volatile (
-        "mov r0, %0\n"
-        "mov r1, %1\n"
-        "mov r2, %2\n"
-        "svc %3\n"
-        :
+        "mov r0, %1\n"
+        "mov r1, %2\n"
+        "mov r2, %3\n"
+        "svc %4\n"
+        "mov %0, r0\n"
+        : "=r" (result)
         : "r" ((uint32_t)pipe_idx), "r" (message), "r" ((uint32_t)message_bytes),
           "I" (SVC_PIPE_WRITE_BYTES)
         : "r0", "r1", "r2", "memory"
     );
+    return (bool)result;
 #else
     SVC_HOST_GATE();
-    __pipe_write_bytes(pipe_idx, message, message_bytes);
+    return __pipe_write_bytes(pipe_idx, message, message_bytes);
 #endif
 }
 
@@ -1311,21 +1580,24 @@ void pipe_write_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes)
  * @brief Read bytes from pipe buffer atomically in privileged mode
  * @note  Called after pipe_can_dequeue() spin loop exits
  */
-void pipe_read_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes) {
+bool pipe_read_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes) {
 #ifndef HOST_TEST
+    uint32_t result;
     __asm__ volatile (
-        "mov r0, %0\n"
-        "mov r1, %1\n"
-        "mov r2, %2\n"
-        "svc %3\n"
-        :
+        "mov r0, %1\n"
+        "mov r1, %2\n"
+        "mov r2, %3\n"
+        "svc %4\n"
+        "mov %0, r0\n"
+        : "=r" (result)
         : "r" ((uint32_t)pipe_idx), "r" (message), "r" ((uint32_t)message_bytes),
           "I" (SVC_PIPE_READ_BYTES)
         : "r0", "r1", "r2", "memory"
     );
+    return (bool)result;
 #else
     SVC_HOST_GATE();
-    __pipe_read_bytes(pipe_idx, message, message_bytes);
+    return __pipe_read_bytes(pipe_idx, message, message_bytes);
 #endif
 }
 
@@ -1865,7 +2137,7 @@ bool tbl_load_at(tbl_id_t id, uint16_t offset, const uint8_t *data,
     return (bool)result;
 #else
     SVC_HOST_GATE();
-    if (!svc_user_buffer_ok((uintptr_t)data, len)) {
+    if (!svc_user_buffer_ok((uintptr_t)data, len, SVC_ACCESS_READ)) {
         return false;
     }
     return __tbl_load_at(id, offset, data, len, schema_crc);
@@ -2120,7 +2392,7 @@ bool bkpram_write(const void *src, uint32_t offset, uint32_t len) {
 #else
     SVC_HOST_GATE();
     if (!bkpram_range_ok(offset, len) ||
-        !svc_user_buffer_ok((uintptr_t)src, len)) {
+        !svc_user_buffer_ok((uintptr_t)src, len, SVC_ACCESS_READ)) {
         return false;
     }
     (void)memcpy(&bkpram_host_store[offset], src, len);
@@ -2147,7 +2419,7 @@ bool bkpram_read(void *dst, uint32_t offset, uint32_t len) {
 #else
     SVC_HOST_GATE();
     if (!bkpram_range_ok(offset, len) ||
-        !svc_user_buffer_ok((uintptr_t)dst, len)) {
+        !svc_user_buffer_ok((uintptr_t)dst, len, SVC_ACCESS_WRITE)) {
         return false;
     }
     (void)memcpy(dst, &bkpram_host_store[offset], len);

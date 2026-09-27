@@ -31,6 +31,10 @@ extern "C" {
 #define BSP_DTCM_BASE           0x20000000UL
 #define BSP_DTCM_SIZE           (128 * 1024)
 
+/** @brief Upper DTCM half: unprivileged application data (64KB, user RW) */
+#define BSP_DTCM_APP_BASE       (BSP_DTCM_BASE + (BSP_DTCM_SIZE / 2))
+#define BSP_DTCM_APP_SIZE       (BSP_DTCM_SIZE / 2)
+
 /** @brief Upper DTCM for OBC application hot data (64KB, unprivileged RW) */
 #define BSP_DTCM_OBC_BASE      0x20010000UL
 #define BSP_DTCM_OBC_SIZE      (64 * 1024)

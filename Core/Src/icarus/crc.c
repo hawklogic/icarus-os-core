@@ -38,9 +38,8 @@
 #ifndef HOST_TEST
 
 #include "icarus/kernel.h"   /* enter_critical / exit_critical */
-#include "icarus/svc.h"
+#include "icarus/svc.h"      /* SVC number, svc_caller_is_privileged */
 #include "stm32h7xx.h"
-#include <stdbool.h>
 
 /* CRC->CR field encodings (from RM0433):
  *   bit 0      RESET     — write 1 to reload INIT into the data register
@@ -104,9 +103,7 @@ ITCM_FUNC uint16_t __crc16_ccitt(const uint8_t *data, uint16_t len) {
  *          that the critical section uses, so they go through an SVC gate.
  */
 uint16_t crc16_ccitt(const uint8_t *data, uint16_t len) {
-    bool in_handler   = (__get_IPSR() != 0u);
-    bool privileged   = ((__get_CONTROL() & 0x1u) == 0u);
-    if (in_handler || privileged) {
+    if (svc_caller_is_privileged()) {
         return __crc16_ccitt(data, len);
     }
     uint32_t result;

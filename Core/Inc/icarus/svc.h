@@ -28,6 +28,7 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define SVC_TASK_ACTIVE_SLEEP           0
 #define SVC_TASK_BLOCKING_SLEEP         1
@@ -169,8 +170,11 @@ extern "C" {
 /* Offset-addressed table load                                             */
 #define SVC_TBL_LOAD_AT                 92  /* bool: write chunk at offset   */
 
+/* USB CDC transmit ring (data in DTCM_PRIV)                               */
+#define SVC_CDC_TX_WRITE                93  /* uint16_t: bytes queued        */
+
 /** @brief Highest SVC number in use.  Update when adding a new SVC. */
-#define SVC_MAX_NUMBER                  SVC_TBL_LOAD_AT
+#define SVC_MAX_NUMBER                  SVC_CDC_TX_WRITE
 
 /* ============================================================================
  * COMPILE-TIME SVC VALIDATION
@@ -182,8 +186,66 @@ _Static_assert(SVC_MAX_NUMBER <= 255,
 
 _Static_assert((SVC_MAX_NUMBER >= SVC_FS_STATS) &&
                (SVC_MAX_NUMBER >= SVC_CDC_RX_DROPPED) &&
-               (SVC_MAX_NUMBER >= SVC_TBL_LOAD_AT),
+               (SVC_MAX_NUMBER >= SVC_TBL_LOAD_AT) &&
+               (SVC_MAX_NUMBER >= SVC_CDC_TX_WRITE),
                "SVC_MAX_NUMBER must be >= all other SVC numbers");
+
+/* ============================================================================
+ * CALLER BUFFER POLICY
+ * ========================================================================= */
+
+/**
+ * @brief  How a privileged SVC implementation touches a caller buffer.
+ */
+typedef enum {
+    SVC_ACCESS_READ  = 0,   /**< Kernel reads the buffer (caller → kernel).  */
+    SVC_ACCESS_WRITE = 1    /**< Kernel writes the buffer (kernel → caller). */
+} svc_access_t;
+
+/**
+ * @brief  Pure allowlist check for a buffer an SVC handler will touch.
+ *
+ * @details SVC implementations copy with privilege, so the MPU does not
+ *          stop them.  Every caller-supplied pointer is therefore checked
+ *          against the memory an unprivileged task may legitimately own:
+ *          - write (and read): RAM_D1, the upper (application) DTCM half,
+ *            and the calling task's own data-pool slot;
+ *          - read only: internal flash and ITCM (constants and code).
+ *          Everything else — privileged DTCM, other tasks' data-pool slots,
+ *          SRAM4, backup SRAM, peripherals, the system control space and
+ *          unmapped addresses — is rejected.  The whole range must lie
+ *          inside one region.
+ *
+ *          The function has no state: the task slot is a parameter, so the
+ *          policy can be unit-tested on the host with the target memory map.
+ *
+ * @param[in] addr       Buffer start address.
+ * @param[in] len        Buffer length in bytes (0 is allowed: nothing is
+ *                       touched).
+ * @param[in] access     @ref SVC_ACCESS_READ or @ref SVC_ACCESS_WRITE.
+ * @param[in] slot_base  Start of the calling task's data-pool slot.
+ * @param[in] slot_size  Size of that slot in bytes (0 = no slot).
+ *
+ * @retval true   @p addr is non-NULL, the range does not wrap, and it lies
+ *                wholly inside one region that permits @p access.
+ * @retval false  Otherwise.
+ */
+bool svc_buffer_allowed(uintptr_t addr, uint32_t len, svc_access_t access,
+                        uintptr_t slot_base, uint32_t slot_size);
+
+/**
+ * @brief  Whether the caller may call a privileged implementation directly.
+ *
+ * @details True in handler mode (exceptions, interrupts, SVC implementations)
+ *          and in privileged thread mode (boot code before the scheduler
+ *          drops privilege).  Wrappers that must work from any context use
+ *          it to skip the SVC, which would fault from handler mode.
+ *          Always true under HOST_TEST.
+ *
+ * @retval true   Handler mode or privileged thread mode.
+ * @retval false  Unprivileged thread mode (a task): use the SVC gate.
+ */
+bool svc_caller_is_privileged(void);
 
 /* ============================================================================
  * HOST-TEST NESTED-SVC GUARD

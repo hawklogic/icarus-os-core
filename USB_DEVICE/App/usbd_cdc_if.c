@@ -30,6 +30,14 @@
  * SVC gates declared in icarus/cdc_rx.h.
  */
 #include "icarus/cdc_rx.h"
+/*
+ * All transmission goes through the kernel USB CDC transmit ring
+ * (bsp/cdc.h): the callbacks below advance it on transfer completion and
+ * reset its in-flight state when the interface is (re)initialised.  Only
+ * the ring calls CDC_Transmit_FS(), always with interrupts masked, so its
+ * TxState check-then-start cannot race.
+ */
+#include "bsp/cdc.h"
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -166,6 +174,11 @@ static int8_t CDC_Init_FS(void)
   /* Set Application Buffers */
   USBD_CDC_SetTxBuffer(&hUsbDeviceFS, UserTxBufferFS, 0);
   USBD_CDC_SetRxBuffer(&hUsbDeviceFS, UserRxBufferFS);
+  /* A transfer in flight before this (re)configuration is gone.  Do not
+   * start one here: the class clears TxState after this callback and the
+   * device is not CONFIGURED yet.  The next write or the host opening the
+   * port (SET_CONTROL_LINE_STATE) restarts transmission. */
+  __cdc_tx_on_link_reset();
   return (USBD_OK);
   /* USER CODE END 3 */
 }
@@ -178,6 +191,8 @@ static int8_t CDC_DeInit_FS(void)
 {
   /* USER CODE BEGIN 4 */
   cdc_dtr_asserted = 0U;
+  /* USB reset or disconnect: the transfer in flight will never complete. */
+  __cdc_tx_on_link_reset();
   return (USBD_OK);
   /* USER CODE END 4 */
 }
@@ -247,6 +262,9 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
         const USBD_SetupReqTypedef *req = (const USBD_SetupReqTypedef *)(void *)pbuf;
         cdc_dtr_asserted = ((req->wValue & 0x0001U) != 0U) ? 1U : 0U;
       }
+      /* The device is configured by now: send output queued while no
+       * host was attached. */
+      __cdc_tx_kick();
     break;
 
     case CDC_SEND_BREAK:
@@ -346,6 +364,9 @@ static int8_t CDC_TransmitCplt_FS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
   UNUSED(Buf);
   UNUSED(Len);
   UNUSED(epnum);
+  /* TxState is already clear: release the sent bytes and start the next
+   * run from the transmit ring. */
+  __cdc_tx_on_complete();
   /* USER CODE END 13 */
   return result;
 }

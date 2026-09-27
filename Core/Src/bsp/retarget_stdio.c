@@ -2,12 +2,14 @@
  * @file    retarget_stdio.c
  * @brief   printf retarget to USB CDC — non-blocking console output
  *
- * @details See retarget_stdio.h.  Two line buffers alternate so the USB
- *          driver can still be reading the previous line while the next
- *          one is filled.  After a successful hand-off the other buffer is
- *          filled next; a dropped buffer was never handed over and is
- *          reused, so a buffer that may still be in flight is not
- *          overwritten.
+ * @details See retarget_stdio.h.  This file keeps no buffer of its own:
+ *          every byte is copied straight into the privileged USB CDC
+ *          transmit ring by cdc_tx_write(), which is safe from any context
+ *          (an SVC from tasks, a direct call from privileged code and
+ *          handlers).  Partial writes are accepted, and whatever did not fit
+ *          is added to a drop counter.  The counter lives in ordinary RAM so
+ *          unprivileged code can read it, and is updated with an atomic add
+ *          because tasks that print can preempt each other.
  *
  * @author  Souham Biswas
  * @date    2026
@@ -20,77 +22,61 @@
 #include "bsp/retarget_stdio.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 
-#include "usbd_cdc_if.h"
-#include "usbd_def.h"
+#include "bsp/cdc.h"
 
-/* Plain .bss (RAM_D1, full access) so unprivileged tasks can print. */
-static uint8_t  stdio_buf[2][STDIO_LINE_BUF_SIZE];
-static uint8_t  stdio_cur;       /**< Buffer currently being filled.  */
-static uint8_t  stdio_len;       /**< Bytes in the current buffer.    */
-static uint32_t stdio_dropped;   /**< Bytes dropped since boot.       */
+/** @brief Console bytes dropped since boot (plain RAM: readable by tasks). */
+static uint32_t stdio_dropped;
 
-/**
- * @brief  Short busy wait between transmit attempts.
- * @details Deliberately not a kernel sleep: this path must be usable
- *          before the scheduler starts and must never issue an SVC or
- *          lock the scheduler.
- */
-static void stdio_spin(void) {
-    for (volatile uint32_t d = 0u; d < STDIO_TX_RETRY_SPIN; d++) {
+/** @copydoc stdio_write */
+uint32_t stdio_write(const uint8_t *data, uint32_t len) {
+    if ((data == NULL) || (len == 0u)) {
+        return 0u;
     }
-}
-
-/**
- * @brief  Hand one buffer to the USB endpoint.
- * @param[in] data  Bytes to send.
- * @param[in] len   Byte count.
- * @retval true   Transfer accepted by the USB stack.
- * @retval false  Dropped (not configured, or busy past the retry budget).
- */
-static bool stdio_flush(uint8_t *data, uint8_t len) {
-    uint8_t result = CDC_Transmit_FS(data, len);
-
-    /* Only worth waiting if a host application has the port open. */
-    uint32_t attempts = 0u;
-    while ((result == (uint8_t)USBD_BUSY) && (CDC_IsDtrAsserted() != 0U) &&
-           (attempts < STDIO_TX_RETRY_MAX)) {
-        stdio_spin();
-        result = CDC_Transmit_FS(data, len);
-        attempts++;
+    uint32_t done = 0u;
+    while (done < len) {
+        uint32_t chunk = len - done;
+        if (chunk > 0xFFFFu) {
+            chunk = 0xFFFFu;
+        }
+        uint16_t n = cdc_tx_write(&data[done], (uint16_t)chunk, false);
+        done += n;
+        if (n < chunk) {
+            break;                                  /* ring full */
+        }
     }
-
-    if (result != (uint8_t)USBD_OK) {
-        stdio_dropped += len;
-        return false;
+    if (done < len) {
+        (void)__atomic_fetch_add(&stdio_dropped, len - done,
+                                 __ATOMIC_RELAXED);
     }
-    return true;
+    return done;
 }
 
 int __io_putchar(int ch) {
-    stdio_buf[stdio_cur][stdio_len] = (uint8_t)ch;
-    stdio_len++;
-
-    if ((ch == (int)'\n') || (stdio_len >= (uint8_t)STDIO_LINE_BUF_SIZE)) {
-        if (stdio_flush(stdio_buf[stdio_cur], stdio_len)) {
-            /* The driver now owns this buffer until the transfer ends;
-             * fill the other one next. */
-            stdio_cur ^= 1u;
-        }
-        /* On a drop the buffer was never handed over, so reuse it. */
-        stdio_len = 0u;
-    }
+    uint8_t byte = (uint8_t)ch;
+    (void)stdio_write(&byte, 1u);
     return ch;
 }
 
+#ifndef HOST_TEST
+/* Overrides the weak newlib stub in syscalls.c, which wrote one character
+ * at a time. */
+int _write(int file, char *ptr, int len) {
+    (void)file;
+    if ((ptr != NULL) && (len > 0)) {
+        (void)stdio_write((const uint8_t *)ptr, (uint32_t)len);
+    }
+    return len;
+}
+#endif
+
 uint32_t stdio_get_tx_dropped(void) {
-    return stdio_dropped;
+    return __atomic_load_n(&stdio_dropped, __ATOMIC_RELAXED);
 }
 
 #ifdef HOST_TEST
 void __stdio_host_reset(void) {
-    stdio_cur     = 0u;
-    stdio_len     = 0u;
     stdio_dropped = 0u;
 }
 #endif

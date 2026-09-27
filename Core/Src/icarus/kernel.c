@@ -284,7 +284,24 @@ ITCM_FUNC uint32_t* __kernel_get_data(uint8_t task_idx)
     return data_pool[task_idx];
 }
 
-
+/**
+ * @brief  Privileged: bounds of the running task's data-pool slot.
+ * @param[out] base  Slot start address (0 if there is no valid task index).
+ * @param[out] size  Slot size in bytes (0 if there is no valid task index).
+ * @note   Used by the SVC buffer checks.  Inside the SVC handler the
+ *         running task is the caller: PendSV cannot preempt the handler.
+ */
+ITCM_FUNC void __kernel_current_data_slot(uintptr_t *base, uint32_t *size)
+{
+    uint8_t idx = current_task_index;
+    if (idx >= (uint8_t)ICARUS_MAX_TASKS) {
+        *base = 0u;
+        *size = 0u;
+        return;
+    }
+    *base = (uintptr_t)data_pool[idx];
+    *size = (uint32_t)sizeof(data_pool[idx]);
+}
 
 
 /**

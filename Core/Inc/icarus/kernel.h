@@ -152,8 +152,10 @@ void* kernel_protected_data(uint16_t num_words);
  *          Under HOST_TEST the same checks apply and the data goes to a
  *          host buffer that survives simulated resets.
  *
- * @param[in] src     Source buffer.  Must not lie in privileged DTCM or in
- *                    the backup SRAM itself.
+ * @param[in] src     Source buffer.  Must lie in memory the caller may pass
+ *                    to the kernel for reading (see svc_buffer_allowed():
+ *                    RAM_D1, the application DTCM half, the caller's own
+ *                    data-pool slot, internal flash or ITCM).
  * @param[in] offset  Byte offset into backup SRAM (0 .. BSP_BKPSRAM_SIZE-1).
  * @param[in] len     Number of bytes to copy (must be > 0).
  *
@@ -166,7 +168,9 @@ bool bkpram_write(const void *src, uint32_t offset, uint32_t len);
 /**
  * @brief  Copy data out of the backup SRAM via SVC.
  *
- * @param[out] dst     Destination buffer (same restrictions as src above).
+ * @param[out] dst     Destination buffer.  Must be writable by the caller
+ *                     (RAM_D1, the application DTCM half or the caller's
+ *                     own data-pool slot; see svc_buffer_allowed()).
  * @param[in]  offset  Byte offset into backup SRAM.
  * @param[in]  len     Number of bytes to copy (must be > 0).
  *
@@ -197,6 +201,7 @@ void __os_start(void);
 void* __kernel_protected_data(uint16_t num_words);
 uint32_t* __kernel_get_stack(uint8_t task_idx);
 uint32_t* __kernel_get_data(uint8_t task_idx);
+void __kernel_current_data_slot(uintptr_t *base, uint32_t *size);
 
 #ifdef __cplusplus
 }

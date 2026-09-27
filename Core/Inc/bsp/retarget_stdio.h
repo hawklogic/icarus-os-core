@@ -2,17 +2,17 @@
  * @file    retarget_stdio.h
  * @brief   printf retarget to USB CDC — non-blocking console output
  *
- * @details __io_putchar() buffers characters and flushes a line (or a full
- *          buffer) to the USB CDC endpoint.  Output never blocks for long:
- *          - device not configured by a host → the line is dropped at once;
- *          - endpoint busy and the host has the port open (DTR asserted) →
- *            a short bounded retry, then the line is dropped;
- *          - endpoint busy and nobody listening (DTR clear) → dropped at once.
- *          Dropped bytes are counted so the application can report them.
+ * @details newlib's `_write()` (and `__io_putchar()` for single characters)
+ *          copy console output into the USB CDC transmit ring
+ *          (`bsp/cdc.h`), the same ring that carries raw `CDC_Write()`
+ *          traffic, so text and binary output keep their order.  Output never
+ *          blocks, sleeps or spins and is safe from any task or handler:
+ *          bytes that do not fit in the ring (host not reading, or device
+ *          not configured for long enough to fill it) are dropped and
+ *          counted so the application can report them.
  *
- *          The retry loop is a plain bounded spin: it issues no supervisor
- *          calls and never disables the scheduler, so console output cannot
- *          starve other tasks or the watchdog when no host is reading.
+ *          Output is not line-buffered here: newlib's own stdout buffering
+ *          decides when `_write()` is called.
  *
  * @author  Souham Biswas
  * @date    2026
@@ -31,30 +31,42 @@ extern "C" {
 
 #include <stdint.h>
 
-/** @brief Console line buffer size (bytes). */
-#define STDIO_LINE_BUF_SIZE      64u
-
-/** @brief Transmit attempts after the first, while DTR is asserted. */
-#define STDIO_TX_RETRY_MAX       10u
-
-/** @brief Spin iterations between attempts (~0.2–0.3 ms at 480 MHz). */
-#define STDIO_TX_RETRY_SPIN      20000u
+/**
+ * @brief  Queue console bytes (the path `_write()` and `__io_putchar()` use).
+ * @param[in] data  Bytes to send.
+ * @param[in] len   Byte count.
+ * @return Bytes queued; the rest were dropped and added to
+ *         stdio_get_tx_dropped().
+ */
+uint32_t stdio_write(const uint8_t *data, uint32_t len);
 
 /**
- * @brief  Retarget hook used by newlib's printf.
+ * @brief  Retarget hook used by newlib for single characters.
  * @param  ch  Character to output.
- * @return The character written.
+ * @return The character written (also when it was dropped).
  */
 int __io_putchar(int ch);
 
+#ifndef HOST_TEST
 /**
- * @brief  Total console bytes dropped because the host was not reading.
+ * @brief  newlib system call behind printf()/puts()/fwrite(stdout).
+ * @param  file  File descriptor (ignored: all output goes to USB CDC).
+ * @param  ptr   Bytes to write.
+ * @param  len   Byte count.
+ * @return @p len — dropped bytes are counted, not reported, so newlib never
+ *         retries or marks stdout as failed.
+ */
+int _write(int file, char *ptr, int len);
+#endif
+
+/**
+ * @brief  Total console bytes dropped because the transmit ring was full.
  * @return Byte count since boot (wraps at 2^32).
  */
 uint32_t stdio_get_tx_dropped(void);
 
 #ifdef HOST_TEST
-/** @brief Test hook: discard any partially buffered line and the counter. */
+/** @brief Test hook: clear the dropped-byte counter. */
 void __stdio_host_reset(void);
 #endif
 

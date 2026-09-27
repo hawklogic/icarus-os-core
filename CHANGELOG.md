@@ -13,10 +13,38 @@ STM32H750 board; each has a host test or a static check guarding it.
 - **Console output could stall a task until the watchdog reset.**
   `CDC_Transmit_FS` read a NULL class handle before the host configured
   the device and reported BUSY forever, and `__io_putchar` retried with the
-  scheduler locked.  The transmit call now fails while unconfigured;
-  `__io_putchar` double-buffers, retries a bounded number of times only
-  while the host has the port open (DTR), then drops and counts
-  (`stdio_get_tx_dropped()`); `CDC_Write` likewise retries only with DTR.
+  scheduler locked.  The transmit call now fails while unconfigured.
+- **USB CDC output could corrupt itself or block its caller.**  The stdio
+  line buffers were shared by preemptive tasks without a lock: a task
+  preempted mid-flush let the next printer write past the buffer and hand
+  USB a buffer it was still sending.  `CDC_Write` and `printf` also raced
+  on `CDC_Transmit_FS`'s busy check, and `CDC_Write` retried up to 500 ×
+  `task_active_sleep(1)`, so callers missed deadlines whenever a host held
+  the port open without reading.  All CDC output (`printf` via a strong
+  `_write()`, `__io_putchar`, `CDC_Write`) now goes through one 4 KB
+  transmit ring in privileged DTCM (`bsp/cdc.h`, `CDC_TX_RING_SIZE`).
+  Producers copy in and return — nothing waits, spins or sleeps, from any
+  task or handler.  `CDC_Write` is all-or-nothing and returns false when
+  the ring is full; `printf` keeps what fits and counts the rest
+  (`stdio_get_tx_dropped()`).  The idle-check-and-start of a transfer runs
+  with interrupts masked, bytes stay in the ring until the
+  transfer-complete interrupt releases them, and a USB reset or
+  re-configuration clears the in-flight state so a lost transfer cannot
+  wedge the ring.  Output queued before a host attaches is sent when it
+  opens the port.
+- **SVC handlers dereferenced caller pointers almost unchecked.**  The
+  buffer check only rejected privileged DTCM and backup SRAM, so a task
+  could make the kernel copy, with privilege, into another task's
+  data-pool slot, SRAM4 or the system control space, or fault the handler
+  on read-only or unmapped addresses; `cs_check_all`, `cs_get_region`,
+  `tbl_load`, the pipe byte gates, `fs_*`, `event_drain`, `sb_publish` and
+  others did no check at all.  Every SVC that touches caller memory now
+  validates it against an allowlist for the access it makes
+  (`svc_buffer_allowed()`): writes only to RAM_D1, the application DTCM
+  half, or the caller's own data-pool slot; reads also from internal flash
+  and ITCM.  Names are checked byte by byte up to their maximum length.
+  A rejected pointer returns the call's failure value and touches no
+  memory.
 - **SVC inline asm had no `"memory"` clobber** (80 blocks, including
   `enter_critical`/`exit_critical`).  At -O2 `tbl_activate()` read its
   out-parameters before the handler's writes were visible, so every table
@@ -52,15 +80,28 @@ STM32H750 board; each has a host test or a static check guarding it.
   `os_get_memmanage_fault_count()`.
 - Host-test nested-SVC guard (`SVC_HOST_GATE`): a wrapper called while
   another wrapper's handler runs aborts the test run.
-- SVC numbers 86–92: `SVC_BKPRAM_READ`, `SVC_TBL_GET_INFO`,
+- SVC numbers 86–93: `SVC_BKPRAM_READ`, `SVC_TBL_GET_INFO`,
   `SVC_TBL_ABORT`, `SVC_CRC16_CCITT`, `SVC_SYS_ENTER_BOOTLOADER`,
-  `SVC_CDC_RX_DROPPED`, `SVC_TBL_LOAD_AT`.
+  `SVC_CDC_RX_DROPPED`, `SVC_TBL_LOAD_AT`, `SVC_CDC_TX_WRITE`.
+- `cdc_tx_write()` (SVC 93): queue bytes on the USB CDC transmit ring,
+  all-or-nothing or partial; privileged code and handlers call the ring
+  directly.  `stdio_write()`, `svc_caller_is_privileged()`, and the pure
+  `svc_buffer_allowed()` policy (host-tested with the target memory map).
+- Host hooks to simulate a configured/unconfigured device, capture
+  transmitted runs and fire USB transfer completion
+  (`__cdc_host_set_configured`, `__cdc_host_set_auto_complete`,
+  `__cdc_host_complete`, ...).
 
 ### Changed
 
 - The host test suite links and runs again (`cs.c`, `sb.c`,
   `bootloader.c` were missing and a failing run was masked by `|| true`):
-  245 tests.  CI runs it on every push.
+  263 tests.  CI runs it on every push.
+- `pipe_write_bytes()` / `pipe_read_bytes()` return `bool` (false when the
+  pipe is invalid or the buffer is rejected) and `pipe_enqueue()` /
+  `pipe_dequeue()` pass it on instead of always returning true.
+- Removed `CDC_WRITE_MAX_RETRIES`, `STDIO_LINE_BUF_SIZE`,
+  `STDIO_TX_RETRY_MAX` and `STDIO_TX_RETRY_SPIN` (no retry loops remain).
 - `ICARUS_VERSION_STRING` was stale at 0.2.0; now 0.5.0.
 
 ## [0.4.0] - 2026-06-15
