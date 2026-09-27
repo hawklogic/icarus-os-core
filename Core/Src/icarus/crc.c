@@ -15,8 +15,10 @@
  *          faster than the bytewise software loop.
  *
  *          The peripheral has internal state (the running CRC value),
- *          so every public call is wrapped in a critical section to
- *          prevent two tasks corrupting each other's computation.
+ *          so every computation is wrapped in a critical section to
+ *          prevent two tasks corrupting each other's computation.  The
+ *          critical section touches privileged scheduler state, so
+ *          unprivileged callers are routed through an SVC gate.
  *
  *          Under HOST_TEST a portable bytewise loop is used so unit
  *          tests run unchanged off-target.
@@ -36,7 +38,9 @@
 #ifndef HOST_TEST
 
 #include "icarus/kernel.h"   /* enter_critical / exit_critical */
+#include "icarus/svc.h"
 #include "stm32h7xx.h"
+#include <stdbool.h>
 
 /* CRC->CR field encodings (from RM0433):
  *   bit 0      RESET     — write 1 to reload INIT into the data register
@@ -63,7 +67,8 @@ ITCM_FUNC static void crc_hw_init(void) {
     crc_initialised = 1u;
 }
 
-ITCM_FUNC uint16_t crc16_ccitt(const uint8_t *data, uint16_t len) {
+/** @copydoc __crc16_ccitt */
+ITCM_FUNC uint16_t __crc16_ccitt(const uint8_t *data, uint16_t len) {
     if (data == NULL || len == 0) {
         return 0xFFFFu;
     }
@@ -91,9 +96,42 @@ ITCM_FUNC uint16_t crc16_ccitt(const uint8_t *data, uint16_t len) {
     return crc;
 }
 
+/**
+ * @brief  Public entry: pick the path that is legal for the caller.
+ * @details Privileged code (exception handlers, SVC implementations, boot
+ *          code before the scheduler drops privilege) drives the engine
+ *          directly.  Unprivileged tasks cannot touch the scheduler state
+ *          that the critical section uses, so they go through an SVC gate.
+ */
+uint16_t crc16_ccitt(const uint8_t *data, uint16_t len) {
+    bool in_handler   = (__get_IPSR() != 0u);
+    bool privileged   = ((__get_CONTROL() & 0x1u) == 0u);
+    if (in_handler || privileged) {
+        return __crc16_ccitt(data, len);
+    }
+    uint32_t result;
+    __asm__ volatile (
+        "mov r0, %1\n"
+        "mov r1, %2\n"
+        "svc %3\n"
+        "mov %0, r0\n"
+        : "=r" (result)
+        : "r" ((uint32_t)(uintptr_t)data), "r" ((uint32_t)len),
+          "I" (SVC_CRC16_CCITT)
+        : "r0", "r1", "memory"
+    );
+    return (uint16_t)result;
+}
+
 #else /* HOST_TEST — portable bytewise loop */
 
+uint16_t __crc16_ccitt(const uint8_t *data, uint16_t len);
+
 uint16_t crc16_ccitt(const uint8_t *data, uint16_t len) {
+    return __crc16_ccitt(data, len);
+}
+
+uint16_t __crc16_ccitt(const uint8_t *data, uint16_t len) {
     if ((data == NULL) || (len == 0u)) {
         return 0xFFFFu;
     }

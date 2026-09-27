@@ -166,8 +166,11 @@ extern "C" {
 /* CDC RX diagnostics                                                      */
 #define SVC_CDC_RX_DROPPED              91  /* uint32_t: bytes dropped (full)*/
 
+/* Offset-addressed table load                                             */
+#define SVC_TBL_LOAD_AT                 92  /* bool: write chunk at offset   */
+
 /** @brief Highest SVC number in use.  Update when adding a new SVC. */
-#define SVC_MAX_NUMBER                  SVC_CDC_RX_DROPPED
+#define SVC_MAX_NUMBER                  SVC_TBL_LOAD_AT
 
 /* ============================================================================
  * COMPILE-TIME SVC VALIDATION
@@ -178,7 +181,8 @@ _Static_assert(SVC_MAX_NUMBER <= 255,
                "Highest SVC number must fit in 8-bit immediate");
 
 _Static_assert((SVC_MAX_NUMBER >= SVC_FS_STATS) &&
-               (SVC_MAX_NUMBER >= SVC_CDC_RX_DROPPED),
+               (SVC_MAX_NUMBER >= SVC_CDC_RX_DROPPED) &&
+               (SVC_MAX_NUMBER >= SVC_TBL_LOAD_AT),
                "SVC_MAX_NUMBER must be >= all other SVC numbers");
 
 /* ============================================================================

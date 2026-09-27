@@ -12,7 +12,9 @@
  *          is used so unit tests run unchanged off-target.
  *
  *          Thread-safe: each call wraps a critical section because the
- *          CRC peripheral has internal state.
+ *          CRC peripheral has internal state.  Callable from unprivileged
+ *          tasks (routed through an SVC gate) and from privileged code or
+ *          exception handlers (direct).
  *
  * @author  Souham Biswas
  * @date    2026
@@ -38,6 +40,12 @@ extern "C" {
  * @return The 16-bit CRC value.
  */
 uint16_t crc16_ccitt(const uint8_t *data, uint16_t len);
+
+/**
+ * @brief  Privileged implementation (drives the CRC engine directly).
+ * @note   Internal — use crc16_ccitt().
+ */
+uint16_t __crc16_ccitt(const uint8_t *data, uint16_t len);
 
 #ifdef __cplusplus
 }

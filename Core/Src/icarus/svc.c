@@ -30,6 +30,7 @@
 #include "icarus/cs.h"
 #include "icarus/sb.h"
 #include "icarus/fs.h"
+#include "icarus/crc.h"
 #include "bsp/mpu.h"
 #include "bsp/bootloader.h"
 #include <stddef.h>
@@ -495,6 +496,49 @@ void SVC_Handler_C(uint32_t *stack_frame) {
         case SVC_CS_REGION_COUNT:
             stack_frame[0] = (uint32_t)__cs_region_count();
             break;
+
+        /* ---- Table engine extensions ---- */
+        case SVC_TBL_LOAD_AT: {
+            /* r0 = id | offset << 16, r1 = data, r2 = len, r3 = schema_crc */
+            uint16_t len = (uint16_t)stack_frame[2];
+            bool ok = false;
+            if (svc_user_buffer_ok((uintptr_t)arg1, len)) {
+                ok = __tbl_load_at((tbl_id_t)(arg0 & 0xFFu),
+                                   (uint16_t)(arg0 >> 16),
+                                   (const uint8_t *)(uintptr_t)arg1, len,
+                                   (uint16_t)stack_frame[3]);
+            }
+            stack_frame[0] = (uint32_t)ok;
+            break;
+        }
+        case SVC_TBL_ABORT:
+            stack_frame[0] = (uint32_t)__tbl_abort((tbl_id_t)arg0);
+            break;
+        case SVC_TBL_GET_INFO: {
+            bool ok = false;
+            if (svc_user_buffer_ok((uintptr_t)arg1, sizeof(tbl_info_t))) {
+                ok = __tbl_get_info((tbl_id_t)arg0,
+                                    (tbl_info_t *)(uintptr_t)arg1);
+            }
+            stack_frame[0] = (uint32_t)ok;
+            break;
+        }
+
+        /* ---- CDC RX diagnostics ---- */
+        case SVC_CDC_RX_DROPPED:
+            stack_frame[0] = __cdc_rx_dropped();
+            break;
+
+        /* ---- CRC engine for unprivileged callers ---- */
+        case SVC_CRC16_CCITT: {
+            uint16_t len = (uint16_t)arg1;
+            uint16_t crc = 0xFFFFu;
+            if (svc_user_buffer_ok((uintptr_t)arg0, len)) {
+                crc = __crc16_ccitt((const uint8_t *)(uintptr_t)arg0, len);
+            }
+            stack_frame[0] = (uint32_t)crc;
+            break;
+        }
 
         /* ---- System control ---- */
         case SVC_SYS_ENTER_BOOTLOADER:
@@ -1795,6 +1839,89 @@ uint8_t tbl_count(void) {
 #else
     SVC_HOST_GATE();
     return __tbl_count();
+#endif
+}
+
+bool tbl_load_at(tbl_id_t id, uint16_t offset, const uint8_t *data,
+                 uint16_t len, uint16_t schema_crc) {
+#ifndef HOST_TEST
+    uint32_t result;
+    uint32_t packed = (uint32_t)id | ((uint32_t)offset << 16);
+    __asm__ volatile (
+        "mov r0, %1\n"
+        "mov r1, %2\n"
+        "mov r2, %3\n"
+        "mov r3, %4\n"
+        "svc %5\n"
+        "mov %0, r0\n"
+        : "=r" (result)
+        : "r" (packed), "r" ((uint32_t)(uintptr_t)data),
+          "r" ((uint32_t)len), "r" ((uint32_t)schema_crc),
+          "I" (SVC_TBL_LOAD_AT)
+        : "r0", "r1", "r2", "r3"
+    );
+    return (bool)result;
+#else
+    SVC_HOST_GATE();
+    if (!svc_user_buffer_ok((uintptr_t)data, len)) {
+        return false;
+    }
+    return __tbl_load_at(id, offset, data, len, schema_crc);
+#endif
+}
+
+bool tbl_abort(tbl_id_t id) {
+#ifndef HOST_TEST
+    uint32_t result;
+    __asm__ volatile (
+        "mov r0, %1\n"
+        "svc %2\n"
+        "mov %0, r0\n"
+        : "=r" (result)
+        : "r" ((uint32_t)id), "I" (SVC_TBL_ABORT)
+        : "r0"
+    );
+    return (bool)result;
+#else
+    SVC_HOST_GATE();
+    return __tbl_abort(id);
+#endif
+}
+
+bool tbl_get_info(tbl_id_t id, tbl_info_t *out) {
+#ifndef HOST_TEST
+    uint32_t result;
+    __asm__ volatile (
+        "mov r0, %1\n"
+        "mov r1, %2\n"
+        "svc %3\n"
+        "mov %0, r0\n"
+        : "=r" (result)
+        : "r" ((uint32_t)id), "r" ((uint32_t)(uintptr_t)out),
+          "I" (SVC_TBL_GET_INFO)
+        : "r0", "r1", "memory"
+    );
+    return (bool)result;
+#else
+    SVC_HOST_GATE();
+    return __tbl_get_info(id, out);
+#endif
+}
+
+uint32_t cdc_rx_dropped(void) {
+#ifndef HOST_TEST
+    uint32_t result;
+    __asm__ volatile (
+        "svc %1\n"
+        "mov %0, r0\n"
+        : "=r" (result)
+        : "I" (SVC_CDC_RX_DROPPED)
+        : "r0"
+    );
+    return result;
+#else
+    SVC_HOST_GATE();
+    return __cdc_rx_dropped();
 #endif
 }
 

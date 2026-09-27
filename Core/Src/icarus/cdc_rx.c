@@ -32,12 +32,14 @@
 DTCM_DATA_PRIV static volatile uint8_t  rx_buf[CDC_RX_BUF_SIZE];
 DTCM_DATA_PRIV static volatile uint32_t rx_head;
 DTCM_DATA_PRIV static volatile uint32_t rx_tail;
+DTCM_DATA_PRIV static volatile uint32_t rx_dropped;
 
 /* ---- Privileged implementations (run in priv mode, ITCM hot path) ------ */
 
 ITCM_FUNC void __cdc_rx_init(void) {
     rx_head = 0;
     rx_tail = 0;
+    rx_dropped = 0;
 }
 
 ITCM_FUNC void __cdc_rx_push(const uint8_t *data, uint32_t len) {
@@ -47,11 +49,18 @@ ITCM_FUNC void __cdc_rx_push(const uint8_t *data, uint32_t len) {
     for (uint32_t i = 0u; i < len; i++) {
         uint32_t next = (rx_head + 1u) % (uint32_t)CDC_RX_BUF_SIZE;
         if (next == rx_tail) {
+            /* Ring full: the rest of this packet is lost.  Count it so the
+             * consumer can tell data went missing. */
+            rx_dropped += (len - i);
             break;
         }
         rx_buf[rx_head] = data[i];
         rx_head = next;
     }
+}
+
+ITCM_FUNC uint32_t __cdc_rx_dropped(void) {
+    return rx_dropped;
 }
 
 ITCM_FUNC bool __cdc_rx_read_byte(uint8_t *out) {
