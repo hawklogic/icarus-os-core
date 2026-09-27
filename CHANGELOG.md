@@ -3,6 +3,66 @@
 All notable changes to ICARUS OS are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] - 2026-09-27
+
+Robustness release.  Every fix below was first seen failing on an
+STM32H750 board; each has a host test or a static check guarding it.
+
+### Fixed
+
+- **Console output could stall a task until the watchdog reset.**
+  `CDC_Transmit_FS` read a NULL class handle before the host configured
+  the device and reported BUSY forever, and `__io_putchar` retried with the
+  scheduler locked.  The transmit call now fails while unconfigured;
+  `__io_putchar` double-buffers, retries a bounded number of times only
+  while the host has the port open (DTR), then drops and counts
+  (`stdio_get_tx_dropped()`); `CDC_Write` likewise retries only with DTR.
+- **SVC inline asm had no `"memory"` clobber** (80 blocks, including
+  `enter_critical`/`exit_critical`).  At -O2 `tbl_activate()` read its
+  out-parameters before the handler's writes were visible, so every table
+  activation failed on target.  `tools/check_svc_clobbers.py` now fails
+  `make -C tests` if any SVC asm block lacks the clobber.
+- **Checksum-monitor callbacks ran inside the SVC handler**; a callback
+  that made a kernel call issued a nested SVC (HardFault).  `cs_check_all()`
+  now collects mismatches in the handler and invokes the callback in thread
+  mode.
+- **Backup data did not survive reset.**  `BKPRAM_DATA` sat in SRAM4
+  behind the write-back D-cache.  It now lives in the 4 KB backup SRAM
+  (0x38800000, `.bkpsram`) mapped by MPU region 8 as privileged,
+  non-cacheable, execute-never; `bkpram_write` is bounds-checked and
+  `bkpram_read()` is new.
+- **Uninitialised RAM at boot:** startup zero-fills `.dtcm_obc`, and the
+  orphan `.ram_d1` input section is placed in `.data`.
+- **Event ring drain** computed the oldest entry wrongly after a wrap.
+- **Tables:** `tbl_load_at()` honours the chunk offset (identical
+  retransmits accepted; gaps, overruns and mixed schema CRCs rejected);
+  `tbl_abort()`; `tbl_get_info()` copy-out for unprivileged callers;
+  commit is accepted only right after a matching prepare.
+- **`crc16_ccitt()` from unprivileged tasks** faulted on the CRC
+  peripheral; it now goes through an SVC with buffer validation.
+- `SVC_PIPE_INIT` truncated the capacity to 8 bits; the SysTick time-slice
+  counter decremented while the scheduler was stopped; K1 was read
+  active-low although PC13 is pulled down (`BSP_KEY_PRESSED_LEVEL`).
+
+### Added
+
+- `sys_enter_bootloader()` (SVC 90): reboot into the ROM USB DFU
+  bootloader, so boards can be re-flashed without BOOT0/RESET.
+- `cdc_rx_dropped()` (SVC 91), `CDC_IsDtrAsserted()`,
+  `os_get_memmanage_fault_count()`.
+- Host-test nested-SVC guard (`SVC_HOST_GATE`): a wrapper called while
+  another wrapper's handler runs aborts the test run.
+- SVC numbers 86–92: `SVC_BKPRAM_READ`, `SVC_TBL_GET_INFO`,
+  `SVC_TBL_ABORT`, `SVC_CRC16_CCITT`, `SVC_SYS_ENTER_BOOTLOADER`,
+  `SVC_CDC_RX_DROPPED`, `SVC_TBL_LOAD_AT`.
+
+### Changed
+
+- The host test suite links and runs again (`cs.c`, `sb.c`,
+  `bootloader.c` were missing and a failing run was masked by `|| true`):
+  245 tests.  CI runs it on every push.
+- `ICARUS_VERSION_STRING` was stale at 0.2.0; now 0.5.0.
+
 ## [0.4.0] - 2026-06-15
 
 ### Added

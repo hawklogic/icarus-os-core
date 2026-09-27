@@ -511,9 +511,11 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             stack_frame[0] = (uint32_t)ok;
             break;
         }
-        case SVC_TBL_ABORT:
-            stack_frame[0] = (uint32_t)__tbl_abort((tbl_id_t)arg0);
+        case SVC_TBL_ABORT: {
+            bool ok = __tbl_abort((tbl_id_t)arg0);
+            stack_frame[0] = (uint32_t)ok;
             break;
+        }
         case SVC_TBL_GET_INFO: {
             bool ok = false;
             if (svc_user_buffer_ok((uintptr_t)arg1, sizeof(tbl_info_t))) {
