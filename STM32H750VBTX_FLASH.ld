@@ -101,9 +101,11 @@ SECTIONS
   .rodata :
   {
     . = ALIGN(4);
+    _srodata = .;      /* start of constants (for integrity monitoring) */
     *(.rodata)         /* .rodata sections (constants, strings, etc.) */
     *(.rodata*)        /* .rodata* sections (constants, strings, etc.) */
     . = ALIGN(4);
+    _erodata = .;      /* end of constants */
   } >FLASH
 
   .ARM.extab (READONLY) : /* The READONLY keyword is only supported in GCC11 and later, remove it if using GCC10 or earlier. */
