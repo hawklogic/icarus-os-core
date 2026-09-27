@@ -2,9 +2,9 @@
  * @file    button.c
  * @brief   User button (K1) implementation
  *
- * @details Reads the K1 GPIO via `HAL_GPIO_ReadPin` and inverts the
- *          active-low electrical convention so callers see `true`
- *          when the button is held down.
+ * @details Reads the K1 GPIO via `HAL_GPIO_ReadPin` and compares it with
+ *          `BSP_KEY_PRESSED_LEVEL` so callers see `true` only while the
+ *          button is held down (the pin is pulled down and idles low).
  *
  *          Under HOST_TEST the function is backed by an in-memory
  *          state variable that the unit tests can drive via
@@ -26,7 +26,7 @@
 #include "stm32h7xx_hal.h"
 
 bool Button_IsPressed(void) {
-    return HAL_GPIO_ReadPin(BSP_KEY_PORT, BSP_KEY_PIN) == GPIO_PIN_RESET;
+    return HAL_GPIO_ReadPin(BSP_KEY_PORT, BSP_KEY_PIN) == BSP_KEY_PRESSED_LEVEL;
 }
 
 #else /* HOST_TEST — software model */

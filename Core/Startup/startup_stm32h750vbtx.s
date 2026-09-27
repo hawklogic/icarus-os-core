@@ -140,6 +140,26 @@ LoopFillZeroDtcmPriv:
   cmp r2, r4
   bcc FillZeroDtcmPriv
 
+/* Zero fill the DTCM application segment (unprivileged hot data).
+ * Without this, every static placed there started with whatever the
+ * RAM held at power-on (or the previous run's values after a reset). */
+  ldr r2, =_sdtcm_obc
+  ldr r4, =_edtcm_obc
+  movs r3, #0
+  b LoopFillZeroDtcmObc
+
+FillZeroDtcmObc:
+  str  r3, [r2]
+  adds r2, r2, #4
+
+LoopFillZeroDtcmObc:
+  cmp r2, r4
+  bcc FillZeroDtcmObc
+
+/* Enter the ROM bootloader if firmware requested it before the last reset.
+ * Must run before main(): no clocks, caches, MPU or watchdog set up yet. */
+  bl bsp_bootloader_check
+
 /* Call static constructors */
     bl __libc_init_array
 /* Call the application's entry point.*/

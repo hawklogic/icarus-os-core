@@ -102,6 +102,10 @@ uint8_t UserTxBufferFS[APP_TX_DATA_SIZE];
 
 /* USER CODE BEGIN PRIVATE_VARIABLES */
 
+/** Host DTR state, updated by SET_CONTROL_LINE_STATE (plain RAM_D1 so
+ *  unprivileged callers can read it). */
+static volatile uint8_t cdc_dtr_asserted = 0U;
+
 /* USER CODE END PRIVATE_VARIABLES */
 
 /**
@@ -173,6 +177,7 @@ static int8_t CDC_Init_FS(void)
 static int8_t CDC_DeInit_FS(void)
 {
   /* USER CODE BEGIN 4 */
+  cdc_dtr_asserted = 0U;
   return (USBD_OK);
   /* USER CODE END 4 */
 }
@@ -186,7 +191,6 @@ static int8_t CDC_DeInit_FS(void)
   */
 static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 {
-  (void)pbuf;
   (void)length;
   /* USER CODE BEGIN 5 */
   switch(cmd)
@@ -237,7 +241,12 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
     break;
 
     case CDC_SET_CONTROL_LINE_STATE:
-
+      /* wLength is 0 for this request, so the class driver passes the
+       * setup packet itself: wValue bit 0 = DTR, bit 1 = RTS. */
+      if (pbuf != NULL) {
+        const USBD_SetupReqTypedef *req = (const USBD_SetupReqTypedef *)(void *)pbuf;
+        cdc_dtr_asserted = ((req->wValue & 0x0001U) != 0U) ? 1U : 0U;
+      }
     break;
 
     case CDC_SEND_BREAK:
@@ -302,6 +311,13 @@ uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len)
   uint8_t result = USBD_OK;
   /* USER CODE BEGIN 7 */
   USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
+  /* Before the host configures the device (and after a disconnect) the
+   * class handle is NULL.  Dereferencing it read unrelated memory as
+   * TxState and reported BUSY forever, so callers retried every line.
+   * Report FAIL instead: nothing can be sent, and retrying cannot help. */
+  if ((hcdc == NULL) || (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED)) {
+    return USBD_FAIL;
+  }
   if (hcdc->TxState != 0){
     return USBD_BUSY;
   }
@@ -335,6 +351,15 @@ static int8_t CDC_TransmitCplt_FS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
 }
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
+
+/**
+  * @brief  Report whether the host currently asserts DTR.
+  * @retval 1 if DTR is asserted, 0 otherwise.
+  */
+uint8_t CDC_IsDtrAsserted(void)
+{
+  return cdc_dtr_asserted;
+}
 
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 

@@ -51,12 +51,12 @@
             <symbol>pDriver</symbol>
         </error>
         <error id="constParameterCallback" severity="style" msg="Parameter &apos;Len&apos; can be declared as pointer to const. However it seems that &apos;CDC_Receive_FS&apos; is a callback function, if &apos;Len&apos; is declared with const you might also need to cast function pointer(s)." verbose="Parameter &apos;Len&apos; can be declared as pointer to const. However it seems that &apos;CDC_Receive_FS&apos; is a callback function, if &apos;Len&apos; is declared with const you might also need to cast function pointer(s)." cwe="398" file0="../USB_DEVICE/App/usbd_cdc_if.c">
-            <location file="../USB_DEVICE/App/usbd_cdc_if.c" line="270" column="54" info="Parameter &apos;Len&apos; can be declared as pointer to const"/>
-            <location file="../USB_DEVICE/App/usbd_cdc_if.c" line="150" column="3" info="You might need to cast the function pointer here"/>
+            <location file="../USB_DEVICE/App/usbd_cdc_if.c" line="279" column="54" info="Parameter &apos;Len&apos; can be declared as pointer to const"/>
+            <location file="../USB_DEVICE/App/usbd_cdc_if.c" line="154" column="3" info="You might need to cast the function pointer here"/>
             <symbol>Len</symbol>
         </error>
         <error id="constVariablePointer" severity="style" msg="Variable &apos;hcdc&apos; can be declared as pointer to const" verbose="Variable &apos;hcdc&apos; can be declared as pointer to const" cwe="398" file0="../USB_DEVICE/App/usbd_cdc_if.c">
-            <location file="../USB_DEVICE/App/usbd_cdc_if.c" line="304" column="27" info="Variable &apos;hcdc&apos; can be declared as pointer to const"/>
+            <location file="../USB_DEVICE/App/usbd_cdc_if.c" line="313" column="27" info="Variable &apos;hcdc&apos; can be declared as pointer to const"/>
             <symbol>hcdc</symbol>
         </error>
         <error id="unassignedVariable" severity="style" msg="Variable &apos;mem&apos; is not assigned a value." verbose="Variable &apos;mem&apos; is not assigned a value." cwe="665" file0="../USB_DEVICE/Target/usbd_conf.c">
@@ -380,22 +380,25 @@
             <symbol>sp</symbol>
         </error>
         <error id="constVariablePointer" severity="style" msg="Variable &apos;pc_ptr&apos; can be declared as pointer to const" verbose="Variable &apos;pc_ptr&apos; can be declared as pointer to const" cwe="398" file0="../Core/Src/bsp/stm32h7xx_it.c">
-            <location file="../Core/Src/bsp/stm32h7xx_it.c" line="192" column="15" info="Variable &apos;pc_ptr&apos; can be declared as pointer to const"/>
+            <location file="../Core/Src/bsp/stm32h7xx_it.c" line="204" column="15" info="Variable &apos;pc_ptr&apos; can be declared as pointer to const"/>
             <symbol>pc_ptr</symbol>
+        </error>
+        <error id="normalCheckLevelMaxBranches" severity="information" msg="Limiting analysis of branches. Use --check-level=exhaustive to analyze all branches." verbose="Limiting analysis of branches. Use --check-level=exhaustive to analyze all branches." file0="../Core/Src/icarus/cs.c">
+            <location file="../Core/Src/icarus/cs.c" line="0" column="0"/>
         </error>
         <error id="normalCheckLevelMaxBranches" severity="information" msg="Limiting analysis of branches. Use --check-level=exhaustive to analyze all branches." verbose="Limiting analysis of branches. Use --check-level=exhaustive to analyze all branches." file0="../Core/Src/icarus/event.c">
             <location file="../Core/Src/icarus/event.c" line="0" column="0"/>
         </error>
         <error id="constVariablePointer" severity="style" msg="Variable &apos;ptr&apos; can be declared as pointer to const" verbose="Variable &apos;ptr&apos; can be declared as pointer to const" cwe="398" file0="../Core/Src/icarus/svc.c">
-            <location file="../Core/Src/icarus/svc.c" line="104" column="23" info="Variable &apos;ptr&apos; can be declared as pointer to const"/>
+            <location file="../Core/Src/icarus/svc.c" line="228" column="23" info="Variable &apos;ptr&apos; can be declared as pointer to const"/>
             <symbol>ptr</symbol>
         </error>
         <error id="constVariablePointer" severity="style" msg="Variable &apos;ptr&apos; can be declared as pointer to const" verbose="Variable &apos;ptr&apos; can be declared as pointer to const" cwe="398" file0="../Core/Src/icarus/svc.c">
-            <location file="../Core/Src/icarus/svc.c" line="109" column="23" info="Variable &apos;ptr&apos; can be declared as pointer to const"/>
+            <location file="../Core/Src/icarus/svc.c" line="233" column="23" info="Variable &apos;ptr&apos; can be declared as pointer to const"/>
             <symbol>ptr</symbol>
         </error>
         <error id="constVariablePointer" severity="style" msg="Variable &apos;ptr&apos; can be declared as pointer to const" verbose="Variable &apos;ptr&apos; can be declared as pointer to const" cwe="398" file0="../Core/Src/icarus/svc.c">
-            <location file="../Core/Src/icarus/svc.c" line="114" column="19" info="Variable &apos;ptr&apos; can be declared as pointer to const"/>
+            <location file="../Core/Src/icarus/svc.c" line="238" column="19" info="Variable &apos;ptr&apos; can be declared as pointer to const"/>
             <symbol>ptr</symbol>
         </error>
         <error id="constVariablePointer" severity="style" msg="Variable &apos;slot&apos; can be declared as pointer to const" verbose="Variable &apos;slot&apos; can be declared as pointer to const" cwe="398" file0="../Core/Src/icarus/tables.c">

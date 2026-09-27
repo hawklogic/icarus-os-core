@@ -43,8 +43,8 @@ static interactive_state_t g_state = {0};
  */
 static bool read_button_debounced(void)
 {
-    /* Read raw button state (active low, so invert) */
-    bool button_raw = (HAL_GPIO_ReadPin(BSP_KEY_PORT, BSP_KEY_PIN) == GPIO_PIN_RESET);
+    /* Read raw button state (pressed level from bsp/config.h) */
+    bool button_raw = (HAL_GPIO_ReadPin(BSP_KEY_PORT, BSP_KEY_PIN) == BSP_KEY_PRESSED_LEVEL);
     uint32_t current_tick = os_get_tick_count();
     
     if ((current_tick - g_state.last_debounce) > INTERACTIVE_BUTTON_DEBOUNCE_MS) {

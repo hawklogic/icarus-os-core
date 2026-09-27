@@ -222,6 +222,7 @@ void sb_init(void) {
 #ifndef HOST_TEST
     __asm__ volatile ("svc %0\n" : : "I" (SVC_SB_INIT));
 #else
+    SVC_HOST_GATE();
     __sb_init();
 #endif
 }
@@ -248,6 +249,7 @@ bool sb_subscribe(sb_msg_id_t msg_id, uint8_t pipe_idx) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __sb_subscribe(msg_id, pipe_idx);
 #endif
 }
@@ -274,6 +276,7 @@ bool sb_unsubscribe(sb_msg_id_t msg_id, uint8_t pipe_idx) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __sb_unsubscribe(msg_id, pipe_idx);
 #endif
 }
@@ -301,6 +304,7 @@ uint8_t sb_publish(sb_msg_id_t msg_id, const uint8_t *data, uint8_t len) {
     );
     return (uint8_t)result;
 #else
+    SVC_HOST_GATE();
     return __sb_publish(msg_id, data, len);
 #endif
 }
@@ -323,6 +327,7 @@ uint8_t sb_subscriber_count(sb_msg_id_t msg_id) {
     );
     return (uint8_t)result;
 #else
+    SVC_HOST_GATE();
     return __sb_subscriber_count(msg_id);
 #endif
 }
@@ -343,6 +348,7 @@ uint8_t sb_route_count(void) {
     );
     return (uint8_t)result;
 #else
+    SVC_HOST_GATE();
     return __sb_route_count();
 #endif
 }

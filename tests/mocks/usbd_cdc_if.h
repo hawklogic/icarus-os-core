@@ -12,8 +12,9 @@ extern "C" {
 
 #include "mock_usbd_def.h"
 
-// Function used by kernel
+// Functions used by kernel
 USBD_StatusTypeDef CDC_Transmit_FS(uint8_t* Buf, uint16_t Len);
+uint8_t CDC_IsDtrAsserted(void);
 
 #ifdef __cplusplus
 }

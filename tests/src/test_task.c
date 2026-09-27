@@ -1380,15 +1380,24 @@ void test_pipe_init_capacity_max(void) {
 	TEST_ASSERT_EQUAL(128, message_pipe_list[10]->max_count);
 }
 
-// Test: pipe_init - capacity exceeds MAX_MESSAGE_BUFFER_BYTES (should fail)
+// Test: pipe_init - capacity exceeds ICARUS_MAX_MESSAGE_BYTES (should fail)
 void test_pipe_init_capacity_too_large(void) {
 	test_init_task_list();
-	
-	// MAX_MESSAGE_BUFFER_BYTES is 128, so 129 should fail
+
+	// One byte over the configured maximum must be rejected.
 	// Use pipe index 11 to avoid conflicts
-	bool result = pipe_init(11, 129);
+	bool result = pipe_init(11, (uint16_t)(ICARUS_MAX_MESSAGE_BYTES + 1));
 	TEST_ASSERT_FALSE(result);
 	TEST_ASSERT_FALSE(message_pipe_list[11]->engaged);
+}
+
+// Test: pipe_init - capacities above 255 bytes are preserved (no 8-bit truncation)
+void test_pipe_init_capacity_above_255(void) {
+	test_init_task_list();
+
+	bool result = pipe_init(12, 300);
+	TEST_ASSERT_TRUE(result);
+	TEST_ASSERT_EQUAL(300, message_pipe_list[12]->max_count);
 }
 
 // Test: pipe_init - already engaged (should fail)
@@ -2018,6 +2027,9 @@ extern void run_tables_tests(void);
 extern void run_iwdg_tests(void);
 extern void run_cdc_tests(void);
 extern void run_button_tests(void);
+extern void run_svc_guard_tests(void);
+extern void run_stdio_tests(void);
+extern void run_bkpram_tests(void);
 
 // Test runner
 int main(void) {
@@ -2148,6 +2160,7 @@ int main(void) {
 	RUN_TEST(test_pipe_init_zero_capacity);
 	RUN_TEST(test_pipe_init_capacity_max);
 	RUN_TEST(test_pipe_init_capacity_too_large);
+	RUN_TEST(test_pipe_init_capacity_above_255);
 	RUN_TEST(test_pipe_init_already_engaged);
 	RUN_TEST(test_pipe_init_multiple);
 	RUN_TEST(test_pipe_init_boundary);
@@ -2224,6 +2237,9 @@ int main(void) {
 	run_iwdg_tests();
 	run_cdc_tests();
 	run_button_tests();
+	run_svc_guard_tests();
+	run_stdio_tests();
+	run_bkpram_tests();
 
 	return UNITY_END();
 }

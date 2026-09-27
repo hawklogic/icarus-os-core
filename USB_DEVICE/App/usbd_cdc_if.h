@@ -110,6 +110,15 @@ uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len);
 
 /* USER CODE BEGIN EXPORTED_FUNCTIONS */
 
+/**
+  * @brief  Report whether the host currently asserts DTR.
+  * @details Hosts assert DTR while an application has the port open, and
+  *          clear it on close.  Callers use this to stop waiting on a busy
+  *          endpoint when nobody is listening.
+  * @retval 1 if DTR is asserted, 0 otherwise.
+  */
+uint8_t CDC_IsDtrAsserted(void);
+
 /* USER CODE END EXPORTED_FUNCTIONS */
 
 /**

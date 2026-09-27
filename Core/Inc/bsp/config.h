@@ -10,7 +10,7 @@
  *      | Function    | Pin   | Port  | Notes                    |
  *      |-------------|-------|-------|--------------------------|
  *      | LED         | PE3   | GPIOE | Active high              |
- *      | USER_KEY    | PC13  | GPIOC | Active low, pull-down    |
+ *      | USER_KEY    | PC13  | GPIOC | Active high, pull-down   |
  *      | LCD_CS      | PE11  | GPIOE | SPI chip select          |
  *      | LCD_DC      | PE13  | GPIOE | Data/Command select      |
  *      | SPI4_SCK    | PE12  | GPIOE | LCD SPI clock            |
@@ -86,10 +86,15 @@ extern "C" {
 #endif
 #define BSP_LED_CLK_ENABLE()    __HAL_RCC_GPIOE_CLK_ENABLE()
 
-/* User Button (Active Low with Pull-Down) */
+/* User Button: PC13 with internal pull-down, so it idles LOW and reads HIGH
+ * while pressed (button switches to 3V3).  Reading it as active-low made an
+ * idle button look pressed and fired a phantom press at every boot. */
 #define BSP_KEY_PIN             GPIO_PIN_13
 #define BSP_KEY_PORT            GPIOC
 #define BSP_KEY_CLK_ENABLE()    __HAL_RCC_GPIOC_CLK_ENABLE()
+#ifndef BSP_KEY_PRESSED_LEVEL
+#define BSP_KEY_PRESSED_LEVEL   GPIO_PIN_SET
+#endif
 
 /* LCD SPI Chip Select */
 #define BSP_LCD_CS_PIN          GPIO_PIN_11

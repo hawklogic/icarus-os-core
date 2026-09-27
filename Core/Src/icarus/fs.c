@@ -278,6 +278,7 @@ void fs_init(void) {
 #ifndef HOST_TEST
     __asm__ volatile ("svc %0\n" : : "I" (SVC_FS_INIT));
 #else
+    SVC_HOST_GATE();
     __fs_init();
 #endif
 }
@@ -304,6 +305,7 @@ bool fs_create(const char *name, fs_file_t *out) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __fs_create(name, out);
 #endif
 }
@@ -330,6 +332,7 @@ bool fs_open(const char *name, fs_file_t *out) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __fs_open(name, out);
 #endif
 }
@@ -358,6 +361,7 @@ bool fs_write(fs_file_t *f, const uint8_t *data, uint16_t len) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __fs_write(f, data, len);
 #endif
 }
@@ -388,6 +392,7 @@ uint16_t fs_read(fs_file_t *f, uint8_t *buf, uint16_t len, uint16_t offset) {
     );
     return (uint16_t)result;
 #else
+    SVC_HOST_GATE();
     return __fs_read(f, buf, len, offset);
 #endif
 }
@@ -411,6 +416,7 @@ bool fs_delete(const char *name) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __fs_delete(name);
 #endif
 }
@@ -436,6 +442,7 @@ uint8_t fs_list(fs_file_info_t *out, uint8_t max) {
     );
     return (uint8_t)result;
 #else
+    SVC_HOST_GATE();
     return __fs_list(out, max);
 #endif
 }
@@ -454,6 +461,7 @@ void fs_stats(fs_stats_t *out) {
         : "r0"
     );
 #else
+    SVC_HOST_GATE();
     __fs_stats(out);
 #endif
 }

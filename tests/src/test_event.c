@@ -126,7 +126,62 @@ static void test_event_drain_full_ring(void) {
     TEST_ASSERT_EQUAL_UINT32(EVENT_RING_SIZE, event_get_count());
 }
 
+/* Drain everything in chunks of `chunk` and check the ids come out in order
+ * first..last with no duplicates or gaps. */
+static void drain_expect_sequence(uint8_t chunk, uint16_t first, uint16_t last) {
+    event_entry_t out[EVENT_RING_SIZE];
+    uint16_t expect = first;
+    uint8_t n = 0;
+    while (event_drain(out, chunk, &n)) {
+        for (uint8_t k = 0; k < n; k++) {
+            TEST_ASSERT_EQUAL_UINT16(expect, out[k].event_id);
+            expect++;
+        }
+    }
+    TEST_ASSERT_EQUAL_UINT16((uint16_t)(last + 1u), expect);
+    TEST_ASSERT_EQUAL_UINT32(0, event_get_count());
+}
+
+/* Regression: a second drain after a partial drain used to restart at slot 0
+ * and return already-drained entries again. */
+static void test_event_drain_twice_no_duplicates(void) {
+    event_init();
+    for (uint16_t i = 0; i < 20u; i++) {
+        os_event(0, EVENT_INFO, i, NULL, 0);
+    }
+    drain_expect_sequence(16u, 0u, 19u);
+}
+
+/* Regression: after a wrap, draining in chunks used to skip and duplicate. */
+static void test_event_drain_after_wrap_in_chunks(void) {
+    event_init();
+    for (uint16_t i = 0; i < (uint16_t)(EVENT_RING_SIZE + 8u); i++) {
+        os_event(0, EVENT_INFO, i, NULL, 0);
+    }
+    /* Oldest surviving entry is id 8. */
+    drain_expect_sequence(5u, 8u, (uint16_t)(EVENT_RING_SIZE + 7u));
+}
+
+static void test_event_drain_emit_drain_interleaved(void) {
+    event_init();
+    for (uint16_t i = 0; i < 5u; i++) {
+        os_event(0, EVENT_INFO, i, NULL, 0);
+    }
+    event_entry_t out[3];
+    uint8_t n = 0;
+    TEST_ASSERT_TRUE(event_drain(out, 3u, &n));
+    TEST_ASSERT_EQUAL_UINT8(3u, n);
+    TEST_ASSERT_EQUAL_UINT16(2u, out[2].event_id);
+    for (uint16_t i = 5u; i < 9u; i++) {
+        os_event(0, EVENT_INFO, i, NULL, 0);
+    }
+    drain_expect_sequence(4u, 3u, 8u);
+}
+
 void run_event_tests(void) {
+    RUN_TEST(test_event_drain_twice_no_duplicates);
+    RUN_TEST(test_event_drain_after_wrap_in_chunks);
+    RUN_TEST(test_event_drain_emit_drain_interleaved);
     RUN_TEST(test_event_init_clears_state);
     RUN_TEST(test_event_emit_one_increments_count);
     RUN_TEST(test_event_drain_returns_what_was_emitted);

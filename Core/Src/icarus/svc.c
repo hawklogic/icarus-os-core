@@ -31,8 +31,132 @@
 #include "icarus/sb.h"
 #include "icarus/fs.h"
 #include "bsp/mpu.h"
+#include "bsp/bootloader.h"
 #include <stddef.h>
 #include <string.h>
+
+/* ============================================================================
+ * HOST-TEST NESTED-SVC GUARD
+ * ========================================================================= */
+
+#ifdef HOST_TEST
+#include <stdio.h>
+#include <stdlib.h>
+
+/** @brief Name of the wrapper that currently holds the gate, or NULL. */
+static const char *svc_host_open_fn;
+/** @brief Current gate depth (0 = no SVC in progress). */
+static uint32_t svc_host_depth;
+/** @brief Nesting violations since the last reset. */
+static uint32_t svc_host_violations;
+/** @brief Installed nesting handler (NULL = default abort). */
+static svc_host_nesting_fn svc_host_handler;
+
+/**
+ * @brief  Default nesting handler: report and abort the test process.
+ * @param[in] outer  Wrapper that holds the gate.
+ * @param[in] inner  Wrapper that attempted to open a second gate.
+ */
+static void svc_host_default_nesting(const char *outer, const char *inner) {
+    (void)fprintf(stderr,
+                  "\n*** NESTED SVC: %s() called while inside %s() — "
+                  "this HardFaults on target ***\n",
+                  (inner != NULL) ? inner : "?",
+                  (outer != NULL) ? outer : "?");
+    abort();
+}
+
+/** @copydoc svc_host_gate_enter */
+int svc_host_gate_enter(const char *fn_name) {
+    if (svc_host_depth > 0u) {
+        svc_host_violations++;
+        svc_host_nesting_fn fn = (svc_host_handler != NULL)
+                                     ? svc_host_handler
+                                     : svc_host_default_nesting;
+        fn(svc_host_open_fn, fn_name);
+    } else {
+        svc_host_open_fn = fn_name;
+    }
+    svc_host_depth++;
+    return 0;
+}
+
+/** @copydoc svc_host_gate_exit */
+void svc_host_gate_exit(int *token) {
+    (void)token;
+    if (svc_host_depth > 0u) {
+        svc_host_depth--;
+    }
+    if (svc_host_depth == 0u) {
+        svc_host_open_fn = NULL;
+    }
+}
+
+/** @copydoc svc_host_set_nesting_handler */
+void svc_host_set_nesting_handler(svc_host_nesting_fn fn) {
+    svc_host_handler = fn;
+}
+
+/** @copydoc svc_host_nesting_count */
+uint32_t svc_host_nesting_count(void) {
+    return svc_host_violations;
+}
+
+/** @copydoc svc_host_gate_reset */
+void svc_host_gate_reset(void) {
+    svc_host_depth      = 0u;
+    svc_host_violations = 0u;
+    svc_host_open_fn    = NULL;
+}
+#endif /* HOST_TEST */
+
+#ifdef HOST_TEST
+/** @brief Host stand-in for the backup SRAM; survives "resets" in tests. */
+static uint8_t bkpram_host_store[BSP_BKPSRAM_SIZE];
+#endif
+
+/* ============================================================================
+ * SHARED ARGUMENT CHECKS (host and target use identical rules)
+ * ========================================================================= */
+
+/**
+ * @brief  Validate an offset/length pair against the backup SRAM size.
+ * @param[in] offset  Byte offset from the start of backup SRAM.
+ * @param[in] len     Byte count.
+ * @retval true   Range is non-empty and entirely inside backup SRAM.
+ */
+static bool bkpram_range_ok(uint32_t offset, uint32_t len) {
+    return (len > 0u) && (offset < (uint32_t)BSP_BKPSRAM_SIZE) &&
+           (len <= ((uint32_t)BSP_BKPSRAM_SIZE - offset));
+}
+
+/**
+ * @brief  Reject caller buffers that would let a privileged copy read or
+ *         write kernel-only memory (privileged DTCM or the backup SRAM).
+ * @param[in] addr  Buffer start address.
+ * @param[in] len   Buffer length.
+ * @retval true   Buffer is non-NULL, does not wrap, and avoids those areas.
+ */
+static bool svc_user_buffer_ok(uintptr_t addr, uint32_t len) {
+    if ((addr == 0u) || (len == 0u) ||
+        (addr > (UINTPTR_MAX - (uintptr_t)len))) {
+        return false;
+    }
+#ifndef HOST_TEST
+    uintptr_t end = addr + (uintptr_t)len;          /* exclusive */
+    uintptr_t priv_lo = (uintptr_t)BSP_DTCM_BASE;
+    uintptr_t priv_hi = (uintptr_t)BSP_DTCM_OBC_BASE;
+    uintptr_t bkp_lo  = (uintptr_t)BSP_BKPSRAM_BASE;
+    uintptr_t bkp_hi  = bkp_lo + (uintptr_t)BSP_BKPSRAM_SIZE;
+    if ((addr < priv_hi) && (end > priv_lo)) {
+        return false;
+    }
+    if ((addr < bkp_hi) && (end > bkp_lo)) {
+        return false;
+    }
+#endif
+    return true;
+}
 
 /* ============================================================================
  * SVC HANDLER (target only)
@@ -131,7 +255,7 @@ void SVC_Handler_C(uint32_t *stack_frame) {
 
         /* Pipe (non-spinning) */
         case SVC_PIPE_INIT: {
-            bool ret = __pipe_init((uint8_t)arg0, (uint8_t)arg1);
+            bool ret = __pipe_init((uint8_t)arg0, (uint16_t)arg1);
             stack_frame[0] = (uint32_t)ret;
             break;
         }
@@ -359,7 +483,8 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             break;
         }
         case SVC_CS_CHECK_ALL:
-            stack_frame[0] = (uint32_t)__cs_check_all();
+            stack_frame[0] = (uint32_t)__cs_check_all(
+                                 (cs_scan_result_t *)(uintptr_t)arg0);
             break;
         case SVC_CS_GET_REGION: {
             bool ok = __cs_get_region((uint8_t)arg0,
@@ -371,15 +496,34 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             stack_frame[0] = (uint32_t)__cs_region_count();
             break;
 
-        /* ---- BKPRAM write gate ---- */
+        /* ---- System control ---- */
+        case SVC_SYS_ENTER_BOOTLOADER:
+            __sys_enter_bootloader();   /* does not return */
+            break;
+
+        /* ---- Backup SRAM gates ---- */
         case SVC_BKPRAM_WRITE: {
             const void *src = (const void *)(uintptr_t)arg0;
             uint32_t offset = arg1;
             uint32_t len    = stack_frame[2];
             bool ok = false;
-            if (len > 0 && (offset + len) <= BSP_RAM_D3_SIZE &&
-                (offset + len) >= offset) {
-                memcpy((void *)(BSP_RAM_D3_BASE + offset), src, len);
+            if (bkpram_range_ok(offset, len) &&
+                svc_user_buffer_ok((uintptr_t)src, len)) {
+                (void)memcpy((void *)(BSP_BKPSRAM_BASE + offset), src, len);
+                __DSB();
+                ok = true;
+            }
+            stack_frame[0] = (uint32_t)ok;
+            break;
+        }
+        case SVC_BKPRAM_READ: {
+            void    *dst    = (void *)(uintptr_t)arg0;
+            uint32_t offset = arg1;
+            uint32_t len    = stack_frame[2];
+            bool ok = false;
+            if (bkpram_range_ok(offset, len) &&
+                svc_user_buffer_ok((uintptr_t)dst, len)) {
+                (void)memcpy(dst, (const void *)(BSP_BKPSRAM_BASE + offset), len);
                 ok = true;
             }
             stack_frame[0] = (uint32_t)ok;
@@ -479,6 +623,7 @@ void enter_critical(void) {
 #ifndef HOST_TEST
     __asm__ volatile ("svc %0\n" : : "I" (SVC_ENTER_CRITICAL));
 #else
+    SVC_HOST_GATE();
     __enter_critical();
 #endif
 }
@@ -490,6 +635,7 @@ void exit_critical(void) {
 #ifndef HOST_TEST
     __asm__ volatile ("svc %0\n" : : "I" (SVC_EXIT_CRITICAL));
 #else
+    SVC_HOST_GATE();
     __exit_critical();
 #endif
 }
@@ -512,6 +658,7 @@ void os_yield(void) {
 #ifndef HOST_TEST
     __asm__ volatile ("svc %0\n" : : "I" (SVC_OS_YIELD));
 #else
+    SVC_HOST_GATE();
     __os_yield();
 #endif
 }
@@ -532,6 +679,7 @@ uint32_t task_active_sleep(uint32_t ticks) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __task_active_sleep(ticks);
 #endif
 }
@@ -565,6 +713,7 @@ uint32_t os_get_tick_count(void) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __os_get_tick_count();
 #endif
 }
@@ -584,6 +733,7 @@ const char *os_get_current_task_name(void) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __os_get_current_task_name();
 #endif
 }
@@ -603,6 +753,7 @@ uint8_t os_get_running_task_count(void) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __os_get_running_task_count();
 #endif
 }
@@ -622,6 +773,7 @@ uint32_t os_get_task_ticks_remaining(void) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __os_get_task_ticks_remaining();
 #endif
 }
@@ -637,6 +789,7 @@ void os_exit_task(void) {
 #ifndef HOST_TEST
     __asm__ volatile ("svc %0\n" : : "I" (SVC_OS_EXIT_TASK));
 #else
+    SVC_HOST_GATE();
     __os_exit_task();
 #endif
 }
@@ -648,6 +801,7 @@ void os_task_suicide(void) {
 #ifndef HOST_TEST
     __asm__ volatile ("svc %0\n" : : "I" (SVC_OS_TASK_SUICIDE));
 #else
+    SVC_HOST_GATE();
     __os_task_suicide();
 #endif
 }
@@ -666,6 +820,7 @@ void os_register_task(void (*function)(void), const char *name) {
         : "r0", "r1"
     );
 #else
+    SVC_HOST_GATE();
     __os_register_task(function, name);
 #endif
 }
@@ -683,6 +838,7 @@ void os_kill_process(uint8_t task_index) {
         : "r0"
     );
 #else
+    SVC_HOST_GATE();
     __os_kill_process(task_index);
 #endif
 }
@@ -700,6 +856,7 @@ void os_restart_task(uint8_t task_index) {
         : "r0"
     );
 #else
+    SVC_HOST_GATE();
     __os_restart_task(task_index);
 #endif
 }
@@ -724,6 +881,7 @@ uint32_t *kernel_get_stack(uint8_t task_idx) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __kernel_get_stack(task_idx);
 #endif
 }
@@ -744,6 +902,7 @@ uint32_t *kernel_get_data(uint8_t task_idx) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __kernel_get_data(task_idx);
 #endif
 }
@@ -764,6 +923,7 @@ void *kernel_protected_data(uint16_t num_words) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __kernel_protected_data(num_words);
 #endif
 }
@@ -790,6 +950,7 @@ bool semaphore_init(uint8_t semaphore_idx, uint32_t semaphore_count) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __semaphore_init(semaphore_idx, semaphore_count);
 #endif
 }
@@ -831,6 +992,7 @@ uint32_t semaphore_get_count(uint8_t semaphore_idx) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __semaphore_get_count(semaphore_idx);
 #endif
 }
@@ -851,6 +1013,7 @@ uint32_t semaphore_get_max_count(uint8_t semaphore_idx) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __semaphore_get_max_count(semaphore_idx);
 #endif
 }
@@ -877,6 +1040,7 @@ bool pipe_init(uint8_t pipe_idx, uint16_t pipe_capacity_bytes) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __pipe_init(pipe_idx, pipe_capacity_bytes);
 #endif
 }
@@ -911,6 +1075,7 @@ uint16_t pipe_get_count(uint8_t pipe_idx) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __pipe_get_count(pipe_idx);
 #endif
 }
@@ -931,6 +1096,7 @@ uint16_t pipe_get_max_count(uint8_t pipe_idx) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __pipe_get_max_count(pipe_idx);
 #endif
 }
@@ -956,6 +1122,7 @@ bool sem_can_feed(uint8_t semaphore_idx) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __sem_can_feed(semaphore_idx);
 #endif
 }
@@ -977,6 +1144,7 @@ bool sem_can_consume(uint8_t semaphore_idx) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __sem_can_consume(semaphore_idx);
 #endif
 }
@@ -1000,6 +1168,7 @@ bool pipe_can_enqueue(uint8_t pipe_idx, uint8_t message_bytes) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __pipe_can_enqueue(pipe_idx, message_bytes);
 #endif
 }
@@ -1023,6 +1192,7 @@ bool pipe_can_dequeue(uint8_t pipe_idx, uint8_t message_bytes) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __pipe_can_dequeue(pipe_idx, message_bytes);
 #endif
 }
@@ -1045,6 +1215,7 @@ void sem_increment(uint8_t semaphore_idx) {
         : "r0"
     );
 #else
+    SVC_HOST_GATE();
     __sem_increment(semaphore_idx);
 #endif
 }
@@ -1063,6 +1234,7 @@ void sem_decrement(uint8_t semaphore_idx) {
         : "r0"
     );
 #else
+    SVC_HOST_GATE();
     __sem_decrement(semaphore_idx);
 #endif
 }
@@ -1084,6 +1256,7 @@ void pipe_write_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes)
         : "r0", "r1", "r2"
     );
 #else
+    SVC_HOST_GATE();
     __pipe_write_bytes(pipe_idx, message, message_bytes);
 #endif
 }
@@ -1105,6 +1278,7 @@ void pipe_read_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes) 
         : "r0", "r1", "r2"
     );
 #else
+    SVC_HOST_GATE();
     __pipe_read_bytes(pipe_idx, message, message_bytes);
 #endif
 }
@@ -1133,6 +1307,7 @@ const char *os_get_task_name(uint8_t task_idx) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __os_get_task_name(task_idx);
 #endif
 }
@@ -1154,6 +1329,7 @@ uint8_t os_get_num_created_tasks(void) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __os_get_num_created_tasks();
 #endif
 }
@@ -1175,6 +1351,7 @@ uint8_t os_is_running(void) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __os_is_running();
 #endif
 }
@@ -1195,6 +1372,7 @@ icarus_task_state_t os_get_task_state(uint8_t task_idx) {
     );
     return (icarus_task_state_t)result;
 #else
+    SVC_HOST_GATE();
     return __os_get_task_state(task_idx);
 #endif
 }
@@ -1215,6 +1393,7 @@ uint32_t os_get_task_dispatch_count(uint8_t task_idx) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __os_get_task_dispatch_count(task_idx);
 #endif
 }
@@ -1235,6 +1414,7 @@ uint32_t os_get_stack_watermark(uint8_t task_idx) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __os_get_stack_watermark(task_idx);
 #endif
 }
@@ -1252,6 +1432,7 @@ void os_update_stack_watermark(uint8_t task_idx) {
         : "r0"
     );
 #else
+    SVC_HOST_GATE();
     __os_update_stack_watermark(task_idx);
 #endif
 }
@@ -1265,6 +1446,7 @@ void cdc_rx_init(void) {
 #ifndef HOST_TEST
     __asm__ volatile ("svc %0\n" : : "I" (SVC_CDC_RX_INIT));
 #else
+    SVC_HOST_GATE();
     __cdc_rx_init();
 #endif
 }
@@ -1289,6 +1471,7 @@ bool cdc_rx_read_byte(uint8_t *out) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __cdc_rx_read_byte(out);
 #endif
 }
@@ -1305,6 +1488,7 @@ uint32_t cdc_rx_available(void) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __cdc_rx_available();
 #endif
 }
@@ -1317,6 +1501,7 @@ void event_init(void) {
 #ifndef HOST_TEST
     __asm__ volatile ("svc %0\n" : : "I" (SVC_EVENT_INIT));
 #else
+    SVC_HOST_GATE();
     __event_init();
 #endif
 }
@@ -1345,6 +1530,7 @@ void os_event(uint8_t module_id, event_severity_t severity, uint16_t event_id,
         : "r0", "r1", "r2"
     );
 #else
+    SVC_HOST_GATE();
     __os_event(module_id, severity, event_id, payload, payload_len);
 #endif
 }
@@ -1361,6 +1547,7 @@ void event_set_squelch(uint8_t module_id, event_severity_t min_severity) {
         : "r0", "r1"
     );
 #else
+    SVC_HOST_GATE();
     __event_set_squelch(module_id, min_severity);
 #endif
 }
@@ -1378,6 +1565,7 @@ event_severity_t event_get_squelch(uint8_t module_id) {
     );
     return (event_severity_t)result;
 #else
+    SVC_HOST_GATE();
     return __event_get_squelch(module_id);
 #endif
 }
@@ -1401,6 +1589,7 @@ bool event_drain(event_entry_t *out_buf, uint8_t max_entries,
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __event_drain(out_buf, max_entries, num_drained);
 #endif
 }
@@ -1417,6 +1606,7 @@ uint32_t event_get_count(void) {
     );
     return result;
 #else
+    SVC_HOST_GATE();
     return __event_get_count();
 #endif
 }
@@ -1429,6 +1619,7 @@ void tbl_init(void) {
 #ifndef HOST_TEST
     __asm__ volatile ("svc %0\n" : : "I" (SVC_TBL_INIT));
 #else
+    SVC_HOST_GATE();
     __tbl_init();
 #endif
 }
@@ -1446,6 +1637,7 @@ bool tbl_register(const tbl_descriptor_t *desc) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __tbl_register(desc);
 #endif
 }
@@ -1469,6 +1661,7 @@ bool tbl_load(tbl_id_t id, const uint8_t *data, uint16_t len,
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __tbl_load(id, data, len, schema_crc);
 #endif
 }
@@ -1505,7 +1698,10 @@ bool tbl_activate(tbl_id_t id) {
         ok = (bool)result;
     }
 #else
-    ok = __tbl_activate_prepare(id, scratch, &scratch_len, &activate_cb);
+    {
+        SVC_HOST_GATE();
+        ok = __tbl_activate_prepare(id, scratch, &scratch_len, &activate_cb);
+    }
 #endif
 
     if (!ok) {
@@ -1539,7 +1735,10 @@ bool tbl_activate(tbl_id_t id) {
         return (bool)result;
     }
 #else
-    return __tbl_activate_commit(id, scratch, scratch_len);
+    {
+        SVC_HOST_GATE();
+        return __tbl_activate_commit(id, scratch, scratch_len);
+    }
 #endif
 }
 
@@ -1559,6 +1758,7 @@ int16_t tbl_dump(tbl_id_t id, uint8_t *out, uint16_t max) {
     );
     return (int16_t)result;
 #else
+    SVC_HOST_GATE();
     return __tbl_dump(id, out, max);
 #endif
 }
@@ -1576,6 +1776,7 @@ const tbl_descriptor_t *tbl_get_descriptor(tbl_id_t id) {
     );
     return (const tbl_descriptor_t *)(uintptr_t)result;
 #else
+    SVC_HOST_GATE();
     return __tbl_get_descriptor(id);
 #endif
 }
@@ -1592,6 +1793,7 @@ uint8_t tbl_count(void) {
     );
     return (uint8_t)result;
 #else
+    SVC_HOST_GATE();
     return __tbl_count();
 #endif
 }
@@ -1604,6 +1806,7 @@ void cs_init(void) {
 #ifndef HOST_TEST
     __asm__ volatile ("svc %0\n" : : "I" (SVC_CS_INIT));
 #else
+    SVC_HOST_GATE();
     __cs_init();
 #endif
 }
@@ -1618,6 +1821,7 @@ void cs_set_callback(cs_mismatch_fn fn) {
         : "r0"
     );
 #else
+    SVC_HOST_GATE();
     __cs_set_callback(fn);
 #endif
 }
@@ -1638,6 +1842,7 @@ bool cs_add_region(uint8_t idx, const uint8_t *addr, uint32_t size) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __cs_add_region(idx, addr, size);
 #endif
 }
@@ -1657,6 +1862,7 @@ bool cs_enable(uint8_t idx, bool enabled) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __cs_enable(idx, enabled);
 #endif
 }
@@ -1674,24 +1880,55 @@ bool cs_rebaseline(uint8_t idx) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __cs_rebaseline(idx);
 #endif
 }
 
-uint8_t cs_check_all(void) {
+/**
+ * @brief  Privileged scan step of cs_check_all().
+ * @param[out] out  Scan result filled by the privileged implementation.
+ * @return Number of regions that failed.
+ */
+static uint8_t cs_scan(cs_scan_result_t *out) {
 #ifndef HOST_TEST
     uint32_t result;
     __asm__ volatile (
-        "svc %1\n"
+        "mov r0, %1\n"
+        "svc %2\n"
         "mov %0, r0\n"
         : "=r" (result)
-        : "I" (SVC_CS_CHECK_ALL)
-        : "r0"
+        : "r" ((uint32_t)(uintptr_t)out), "I" (SVC_CS_CHECK_ALL)
+        : "r0", "memory"
     );
     return (uint8_t)result;
 #else
-    return __cs_check_all();
+    SVC_HOST_GATE();
+    return __cs_check_all(out);
 #endif
+}
+
+/**
+ * @brief  Scan all regions, then deliver mismatches in thread mode.
+ * @details The privileged scan (SVC) only records mismatches.  The
+ *          callback is invoked here, after the SVC has returned, so it
+ *          runs unprivileged in the caller's context and may itself use
+ *          kernel call gates.
+ */
+uint8_t cs_check_all(void) {
+    cs_scan_result_t scan;
+    (void)memset(&scan, 0, sizeof(scan));
+    uint8_t failures = cs_scan(&scan);
+
+    if (scan.callback != NULL) {
+        for (uint8_t i = 0u; (i < scan.count) &&
+                             (i < (uint8_t)(CS_MAX_REGIONS + 1)); i++) {
+            scan.callback(scan.mismatch[i].region_idx,
+                          scan.mismatch[i].expected,
+                          scan.mismatch[i].actual);
+        }
+    }
+    return failures;
 }
 
 bool cs_get_region(uint8_t idx, cs_region_t *out) {
@@ -1709,6 +1946,7 @@ bool cs_get_region(uint8_t idx, cs_region_t *out) {
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __cs_get_region(idx, out);
 #endif
 }
@@ -1725,6 +1963,7 @@ uint8_t cs_region_count(void) {
     );
     return (uint8_t)result;
 #else
+    SVC_HOST_GATE();
     return __cs_region_count();
 #endif
 }
@@ -1750,12 +1989,46 @@ bool bkpram_write(const void *src, uint32_t offset, uint32_t len) {
     );
     return (bool)result;
 #else
-    (void)offset;
-    if (len == 0u) {
+    SVC_HOST_GATE();
+    if (!bkpram_range_ok(offset, len) ||
+        !svc_user_buffer_ok((uintptr_t)src, len)) {
         return false;
     }
-    /* HOST_TEST: no BKPRAM hardware — treat as no-op success */
-    (void)src;
+    (void)memcpy(&bkpram_host_store[offset], src, len);
     return true;
 #endif
 }
+
+/** @copydoc bkpram_read */
+bool bkpram_read(void *dst, uint32_t offset, uint32_t len) {
+#ifndef HOST_TEST
+    uint32_t result;
+    __asm__ volatile (
+        "mov r0, %1\n"
+        "mov r1, %2\n"
+        "mov r2, %3\n"
+        "svc %4\n"
+        "mov %0, r0\n"
+        : "=r" (result)
+        : "r" ((uint32_t)(uintptr_t)dst), "r" (offset),
+          "r" (len), "I" (SVC_BKPRAM_READ)
+        : "r0", "r1", "r2", "memory"
+    );
+    return (bool)result;
+#else
+    SVC_HOST_GATE();
+    if (!bkpram_range_ok(offset, len) ||
+        !svc_user_buffer_ok((uintptr_t)dst, len)) {
+        return false;
+    }
+    (void)memcpy(dst, &bkpram_host_store[offset], len);
+    return true;
+#endif
+}
+
+#ifdef HOST_TEST
+/** @copydoc __bkpram_host_clear */
+void __bkpram_host_clear(void) {
+    (void)memset(bkpram_host_store, 0, sizeof(bkpram_host_store));
+}
+#endif

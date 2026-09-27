@@ -138,25 +138,53 @@ uint32_t* kernel_get_data(uint8_t task_idx);
 void* kernel_protected_data(uint16_t num_words);
 
 /* ============================================================================
- * BKPRAM WRITE GATE
+ * BACKUP SRAM GATES
  * ========================================================================= */
 
 /**
- * @brief  Copy data into battery-backed RAM (RAM_D3) via SVC.
+ * @brief  Copy data into the backup SRAM (4 KB at 0x38800000) via SVC.
  *
  * @details On target this issues an SVC that runs a validated memcpy in
  *          privileged mode, allowing unprivileged tasks to persist data
- *          into BKPRAM without an MPU region grant.  Under HOST_TEST the
- *          call is a no-op that returns true.
+ *          without an MPU grant.  The region is mapped non-cacheable, so
+ *          the data is in the SRAM when the call returns and survives a
+ *          system or watchdog reset (and power loss while VBAT is held).
+ *          Under HOST_TEST the same checks apply and the data goes to a
+ *          host buffer that survives simulated resets.
  *
- * @param[in] src     Source buffer (caller-owned, any memory domain).
- * @param[in] offset  Byte offset into BKPRAM (0 .. BSP_RAM_D3_SIZE-1).
+ * @param[in] src     Source buffer.  Must not lie in privileged DTCM or in
+ *                    the backup SRAM itself.
+ * @param[in] offset  Byte offset into backup SRAM (0 .. BSP_BKPSRAM_SIZE-1).
  * @param[in] len     Number of bytes to copy (must be > 0).
  *
  * @retval true   Write completed successfully.
- * @retval false  Validation failed (offset+len exceeds BKPRAM, or len==0).
+ * @retval false  Validation failed (range outside backup SRAM, len == 0,
+ *                or a disallowed source buffer).
  */
 bool bkpram_write(const void *src, uint32_t offset, uint32_t len);
+
+/**
+ * @brief  Copy data out of the backup SRAM via SVC.
+ *
+ * @param[out] dst     Destination buffer (same restrictions as src above).
+ * @param[in]  offset  Byte offset into backup SRAM.
+ * @param[in]  len     Number of bytes to copy (must be > 0).
+ *
+ * @retval true   Read completed successfully.
+ * @retval false  Validation failed.
+ */
+bool bkpram_read(void *dst, uint32_t offset, uint32_t len);
+
+#ifdef HOST_TEST
+/** @brief Test hook: zero the host backup-SRAM store (simulated power loss). */
+void __bkpram_host_clear(void);
+#endif
+
+/**
+ * @brief  Number of MemManage faults recovered since boot (unprivileged
+ *         accesses the MPU rejected; the faulting instruction was skipped).
+ */
+uint32_t os_get_memmanage_fault_count(void);
 
 /* ============================================================================
  * PRIVILEGED IMPLEMENTATIONS (Internal - Do Not Call Directly)

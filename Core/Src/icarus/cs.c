@@ -19,6 +19,9 @@
  *          reports region index 0xFF via the mismatch callback to
  *          signal a CRC engine failure.
  *
+ *          The scan runs privileged; the callback is delivered afterwards
+ *          in the caller's thread context (see __cs_check_all()).
+ *
  * @par Memory placement:
  *      - Region table + state: DTCM_DATA_PRIV
  *      - All functions:        ITCM_FUNC
@@ -160,20 +163,34 @@ ITCM_FUNC bool __cs_rebaseline(uint8_t idx) {
 
 /**
  * @brief  Privileged implementation of cs_check_all().
+ * @param[out] out  Scan result (callback pointer + mismatch list).
+ *                  May be NULL, in which case only the count is returned.
  * @return Number of regions that failed the CRC check.
  *
- * @details First checks cs_hw_ok; if the CRC engine itself is suspect,
- *          invokes the callback with region_idx = 0xFF (sentinel) and
- *          returns 1 without scanning any regions.
+ * @details Runs inside the SVC handler, so it never calls user code:
+ *          mismatches are recorded in @p out and the thread-mode wrapper
+ *          delivers them to the callback.  Calling back from here would
+ *          execute user code privileged and any kernel call it makes
+ *          would be a nested SVC (HardFault on ARMv7-M).
  *
- *          Otherwise iterates all enabled regions, recomputes CRC, and
- *          invokes the callback for each mismatch.
+ *          If the CRC engine self-test failed, a single entry with
+ *          region_idx = 0xFF is recorded and no region is scanned.
  */
-ITCM_FUNC uint8_t __cs_check_all(void) {
+ITCM_FUNC uint8_t __cs_check_all(cs_scan_result_t *out) {
+    if (out != NULL) {
+        out->callback = mismatch_cb;
+        out->failures = 0u;
+        out->count    = 0u;
+    }
+
     /* CRC engine self-test failure — report immediately */
     if (!cs_hw_ok) {
-        if (mismatch_cb != NULL) {
-            mismatch_cb(0xFFu, 0u, 0u);
+        if (out != NULL) {
+            out->mismatch[0].region_idx = 0xFFu;
+            out->mismatch[0].expected   = 0u;
+            out->mismatch[0].actual     = 0u;
+            out->count    = 1u;
+            out->failures = 1u;
         }
         return 1u;
     }
@@ -188,10 +205,16 @@ ITCM_FUNC uint8_t __cs_check_all(void) {
                                        (uint16_t)regions[i].size);
         if (actual != regions[i].baseline) {
             failures++;
-            if (mismatch_cb != NULL) {
-                mismatch_cb(i, regions[i].baseline, actual);
+            if ((out != NULL) && (out->count < (uint8_t)CS_MAX_REGIONS)) {
+                out->mismatch[out->count].region_idx = i;
+                out->mismatch[out->count].expected   = regions[i].baseline;
+                out->mismatch[out->count].actual     = actual;
+                out->count++;
             }
         }
+    }
+    if (out != NULL) {
+        out->failures = failures;
     }
     return failures;
 }

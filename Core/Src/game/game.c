@@ -79,8 +79,8 @@ static void game_input_task(void)
     while (1) {
         uint32_t current_tick = os_get_tick_count();
         
-        /* Read button (active low) */
-        bool button_raw = (HAL_GPIO_ReadPin(BSP_KEY_PORT, BSP_KEY_PIN) == GPIO_PIN_RESET);
+        /* Read button (pressed level from bsp/config.h) */
+        bool button_raw = (HAL_GPIO_ReadPin(BSP_KEY_PORT, BSP_KEY_PIN) == BSP_KEY_PRESSED_LEVEL);
         
         /* Debounce and detect state change */
         if ((current_tick - last_debounce) > GAME_BUTTON_DEBOUNCE_MS) {

@@ -3,18 +3,16 @@
  * @brief   Board Support Package — User button (K1)
  *
  * @details Thin wrapper around the K1 user button on the WeAct
- *          STM32H750VBT6 board (PC13, active low). Hides the
- *          `HAL_GPIO_ReadPin(BSP_KEY_PORT, BSP_KEY_PIN) ==
- *          GPIO_PIN_RESET` idiom behind a clean BSP API so callers
- *          do not have to know the polarity or the HAL pin enums.
+ *          STM32H750VBT6 board (PC13, active high). Hides the pin
+ *          polarity and the HAL pin enums behind a clean BSP API.
  *
- *          The pin assignment lives in `bsp/config.h`
- *          (`BSP_KEY_PORT` / `BSP_KEY_PIN`); this header does not
- *          duplicate it.
+ *          The pin assignment and pressed level live in `bsp/config.h`
+ *          (`BSP_KEY_PORT` / `BSP_KEY_PIN` / `BSP_KEY_PRESSED_LEVEL`);
+ *          this header does not duplicate them.
  *
  * @par Hardware:
- *      - K1 button on PC13, active low
- *      - Internal pull-up enabled by `MX_GPIO_Init()`
+ *      - K1 button on PC13, switches to 3V3 (active high)
+ *      - Internal pull-down enabled by `MX_GPIO_Init()`, idles low
  *      - 50 ms debounce is the responsibility of the caller — this
  *        BSP only reports the raw pin state
  *
@@ -38,8 +36,8 @@ extern "C" {
 /**
  * @brief  Read the K1 user button state.
  *
- * @return `true` if the button is currently held down (pin sampled
- *         low after the active-low conversion), `false` otherwise.
+ * @return `true` if the button is currently held down (pin at
+ *         `BSP_KEY_PRESSED_LEVEL`), `false` otherwise.
  *
  * @note   Pure read — no debounce, no edge detection. Callers that
  *         care about transitions should sample twice with a short

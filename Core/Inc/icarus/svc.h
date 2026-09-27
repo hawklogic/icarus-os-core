@@ -150,16 +150,82 @@ extern "C" {
 #define SVC_FS_LIST                     84  /* uint8_t: enumerate files      */
 #define SVC_FS_STATS                    85  /* void: fill stats struct       */
 
+/* Backup SRAM read gate (data in BKPSRAM, priv-only)                      */
+#define SVC_BKPRAM_READ                 86  /* bool: memcpy BKPRAM→dst       */
+
+/* Table engine extensions                                                 */
+#define SVC_TBL_GET_INFO                87  /* bool: copy descriptor out     */
+#define SVC_TBL_ABORT                   88  /* bool: discard staging         */
+
+/* CRC engine for unprivileged callers                                     */
+#define SVC_CRC16_CCITT                 89  /* uint16_t: CRC over caller buf */
+
+/* System control                                                          */
+#define SVC_SYS_ENTER_BOOTLOADER        90  /* noreturn: jump to ROM loader  */
+
+/* CDC RX diagnostics                                                      */
+#define SVC_CDC_RX_DROPPED              91  /* uint32_t: bytes dropped (full)*/
+
+/** @brief Highest SVC number in use.  Update when adding a new SVC. */
+#define SVC_MAX_NUMBER                  SVC_CDC_RX_DROPPED
+
 /* ============================================================================
  * COMPILE-TIME SVC VALIDATION
  * ========================================================================= */
 
 /* SVC instruction encodes number in 1 byte (0-255) */
-_Static_assert(SVC_FS_STATS <= 255,
+_Static_assert(SVC_MAX_NUMBER <= 255,
                "Highest SVC number must fit in 8-bit immediate");
 
-_Static_assert(SVC_FS_STATS >= SVC_KERNEL_PROTECTED_DATA,
-               "SVC_FS_STATS must be >= all other SVC numbers");
+_Static_assert((SVC_MAX_NUMBER >= SVC_FS_STATS) &&
+               (SVC_MAX_NUMBER >= SVC_CDC_RX_DROPPED),
+               "SVC_MAX_NUMBER must be >= all other SVC numbers");
+
+/* ============================================================================
+ * HOST-TEST NESTED-SVC GUARD
+ * ========================================================================= */
+
+#ifdef HOST_TEST
+/**
+ * @brief  Host-only guard that detects a nested supervisor call.
+ *
+ * @details On target, issuing an SVC while already executing inside the
+ *          SVC handler escalates to a HardFault.  Host builds call the
+ *          privileged implementations directly, so that class of bug is
+ *          invisible to unit tests.  Every SVC-gated wrapper therefore
+ *          opens a host "gate" on entry and closes it on return; opening a
+ *          gate while another is open (for example from a callback invoked
+ *          by a privileged implementation) is reported through the
+ *          nesting handler.  Wrappers that run in thread mode on target
+ *          (spin loops, table activation) do not open a gate.
+ *
+ * @par Usage (inside a wrapper's HOST_TEST branch):
+ * @code
+ *     SVC_HOST_GATE();
+ *     return __impl(args);
+ * @endcode
+ */
+typedef void (*svc_host_nesting_fn)(const char *outer, const char *inner);
+
+/** @brief Open a gate; returns a token for the matching close. */
+int  svc_host_gate_enter(const char *fn_name);
+/** @brief Close a gate (called automatically via the cleanup attribute). */
+void svc_host_gate_exit(int *token);
+/**
+ * @brief  Install a nesting handler.  NULL restores the default, which
+ *         prints both wrapper names and aborts the test process.
+ */
+void svc_host_set_nesting_handler(svc_host_nesting_fn fn);
+/** @brief Number of nesting violations observed since the last reset. */
+uint32_t svc_host_nesting_count(void);
+/** @brief Reset the gate depth and the violation counter. */
+void svc_host_gate_reset(void);
+
+#define SVC_HOST_GATE() \
+    int svc_host_gate_token_ \
+        __attribute__((cleanup(svc_host_gate_exit), unused)) = \
+        svc_host_gate_enter(__func__)
+#endif /* HOST_TEST */
 
 /* ============================================================================
  * SVC HANDLER (called from assembly - target only)

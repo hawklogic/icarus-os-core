@@ -6,7 +6,9 @@
  *          `usbd_cdc_if.h`) and busy-retries on `USBD_BUSY` using
  *          `task_active_sleep(1)` between attempts. The retry budget
  *          is bounded by @ref CDC_WRITE_MAX_RETRIES so a stuck endpoint
- *          cannot block the caller forever.
+ *          cannot block the caller forever, and no retry is attempted
+ *          when the host has not asserted DTR (port closed) or the device
+ *          is not configured (`CDC_Transmit_FS` returns FAIL).
  *
  *          Under HOST_TEST the ST middleware is unavailable, so the
  *          implementation is replaced by a small in-memory sink that
@@ -45,7 +47,10 @@ bool CDC_Write(const uint8_t *data, uint16_t len) {
 
     uint8_t  result  = CDC_Transmit_FS(buf, len);
     uint16_t retries = 0u;
-    while (result == USBD_BUSY && retries < CDC_WRITE_MAX_RETRIES) {
+    /* A busy endpoint only drains if a host application has the port
+     * open; without DTR, waiting just delays the caller. */
+    while ((result == USBD_BUSY) && (CDC_IsDtrAsserted() != 0U) &&
+           (retries < CDC_WRITE_MAX_RETRIES)) {
         task_active_sleep(1u);
         result = CDC_Transmit_FS(buf, len);
         retries++;

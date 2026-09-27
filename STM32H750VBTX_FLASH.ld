@@ -48,6 +48,7 @@ MEMORY
   RAM_D1 (xrw)   : ORIGIN = 0x24000000, LENGTH = 512K
   RAM_D2 (xrw)   : ORIGIN = 0x30000000, LENGTH = 288K
   RAM_D3 (xrw)   : ORIGIN = 0x38000000, LENGTH = 64K
+  BKPSRAM (rw)   : ORIGIN = 0x38800000, LENGTH = 4K
   ITCMRAM (xrw)  : ORIGIN = 0x00000000, LENGTH = 64K
 }
 
@@ -151,6 +152,8 @@ SECTIONS
     *(.data*)          /* .data* sections */
     *(.RamFunc)        /* .RamFunc sections */
     *(.RamFunc*)       /* .RamFunc* sections */
+    *(.ram_d1)         /* explicit RAM_D1 data; without this rule the input */
+    *(.ram_d1*)        /* section was an orphan that startup never initialised */
 
     . = ALIGN(4);
     _edata = .;        /* define a global symbol at data end */
@@ -230,10 +233,8 @@ SECTIONS
     _edtcm_obc = .;
   } >DTCMRAM
 
-  /* Battery-backed SRAM (RAM_D3, 64KB) for persistent state across resets.
-   * NOLOAD: startup must NOT zero this region — contents survive warm reset
-   * when VBAT backup regulator is enabled.  Application validates via magic
-   * word + CRC on boot to distinguish cold start from warm restart. */
+  /* SRAM4 (RAM_D3, 64KB), general-purpose D3-domain RAM.  NOLOAD and not
+   * zeroed by startup.  Not battery backed: contents are lost on power loss. */
   .ram_d3 (NOLOAD) :
   {
     . = ALIGN(4);
@@ -243,6 +244,20 @@ SECTIONS
     . = ALIGN(4);
     _eram_d3 = .;
   } >RAM_D3
+
+  /* Backup SRAM (4KB at 0x38800000), retained on VBAT when the backup
+   * regulator is enabled, and across system/watchdog resets.  NOLOAD:
+   * startup must NOT zero it.  Accessed through the bkpram_read()/write()
+   * call gates; the application validates contents (magic + CRC). */
+  .bkpsram (NOLOAD) :
+  {
+    . = ALIGN(4);
+    _sbkpsram = .;
+    *(.bkpsram)
+    *(.bkpsram*)
+    . = ALIGN(4);
+    _ebkpsram = .;
+  } >BKPSRAM
 
   /* Remove information from the standard libraries */
   /DISCARD/ :
