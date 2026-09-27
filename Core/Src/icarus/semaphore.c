@@ -104,9 +104,15 @@ ITCM_FUNC bool __semaphore_consume(uint8_t semaphore_idx) {
  * @brief  Privileged implementation of semaphore_consume_timeout.
  *
  * @details Spins with task_active_sleep(1) checking sem_can_consume()
- *          each tick.  Returns false if max_ticks elapse without the
- *          semaphore becoming available.  max_ticks == 0 is a non-blocking
- *          try (check once, return immediately).
+ *          each time the task runs.  Returns false once max_ticks have
+ *          elapsed on the system tick without the semaphore becoming
+ *          available.  The wait is measured on the tick, not in loop
+ *          iterations: a task_active_sleep(1) lasts until the scheduler
+ *          next runs this task, which is a whole round of the other ready
+ *          tasks' time slices when they are busy, so counting iterations
+ *          stretched the timeout by that factor (1000 ticks became about
+ *          100 s with two CPU-bound tasks).  max_ticks == 0 is a
+ *          non-blocking try (check once, return immediately).
  *
  * @param  semaphore_idx  Semaphore index.
  * @param  max_ticks      Maximum ticks to wait.
@@ -126,13 +132,13 @@ ITCM_FUNC bool __semaphore_consume_timeout(uint8_t semaphore_idx,
     }
 #endif
 
-    uint32_t waited = 0;
+    const uint32_t start = os_get_tick_count();
     while (!sem_can_consume(semaphore_idx)) {
-        if (waited >= max_ticks) {
+        /* Unsigned difference: correct across a tick-counter wrap. */
+        if ((os_get_tick_count() - start) >= max_ticks) {
             return false;
         }
         (void)task_active_sleep(1);
-        waited++;
     }
 
     sem_decrement(semaphore_idx);

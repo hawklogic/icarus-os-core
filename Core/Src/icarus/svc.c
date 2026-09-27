@@ -692,11 +692,13 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             break;
 
         /* ---- Timed semaphore ---- */
-        case SVC_SEMAPHORE_CONSUME_TIMEOUT: {
-            bool ok = __semaphore_consume_timeout((uint8_t)arg0, arg1);
-            stack_frame[0] = ok ? 1u : 0u;
+        case SVC_SEMAPHORE_CONSUME_TIMEOUT:
+            /* The timed wait sleeps and reads the tick through SVC
+             * wrappers, so it runs in thread mode only (the wrapper calls
+             * it directly).  Running it here would nest SVCs (HardFault);
+             * a caller that issues this number directly just fails. */
+            stack_frame[0] = 0u;
             break;
-        }
 
         /* ---- Task diagnostics ---- */
         case SVC_GET_TASK_STATE: {

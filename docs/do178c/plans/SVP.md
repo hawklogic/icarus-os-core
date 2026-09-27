@@ -25,7 +25,7 @@
 | 0.1 | 2025-01-26 | Souham Biswas | Initial draft |
 | 0.2 | 2026-04-01 | Souham Biswas | Added §4.5 Memory Protection Tests with red-team attack vectors and fault recovery verification |
 | 0.3 | 2026-04-11 | Souham Biswas | Added §4.6 Shared Service Module Tests for the v0.3.0 modules; updated §5.4 coverage baseline (91.8% line / 92.5% function across 196 host tests) |
-| 0.4 | 2026-09-27 | Souham Biswas | v0.5.0: added §4.7 Robustness Tests (CDC transmit ring, console retarget, SVC caller-buffer policy, nested-SVC guard, backup SRAM, table load extensions); added the SVC static checks to §6.1 and §6.4; host baseline 272 tests |
+| 0.4 | 2026-09-27 | Souham Biswas | v0.5.0: added §4.7 Robustness Tests (CDC transmit ring, console retarget, SVC caller-buffer policy, nested-SVC guard, backup SRAM, table load extensions); added the SVC static checks to §6.1 and §6.4; host baseline 274 tests |
 
 ---
 
@@ -328,7 +328,7 @@ keeps working across a 30 s close and reopen); the discard behaviour is
 host-tested only. The bus-resume path (PHY clock restart, then kick) is
 host-tested only and not exercised on hardware.
 
-**Pass criteria (v0.5.0 baseline):** 272/272 host tests passing, zero
+**Pass criteria (v0.5.0 baseline):** 274/274 host tests passing, zero
 failures, and both SVC static checks passing.
 
 
@@ -527,7 +527,7 @@ make coverage-html           # Generate HTML report
 # Expected output (example, will evolve):
 # check_svc_clobbers: N files OK
 # check_svc_pointer_checks: 1 dispatch, N cases, ... OK
-# 272 Tests 0 Failures 0 Ignored
+# 274 Tests 0 Failures 0 Ignored
 # ~91% lines, ~89.5% functions (host, filtered kernel+BSP)
 ```
 

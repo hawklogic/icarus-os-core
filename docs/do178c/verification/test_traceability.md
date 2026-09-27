@@ -296,7 +296,7 @@ Run `cd tests && make test` to obtain current pass/fail results.
 | BSP - USB CDC write + transmit ring *(v0.5.0)* | 21 |
 | BSP - IWDG + K1 button *(v0.4.0)* | 10 |
 | BSP - Interrupts | 8 |
-| **Total (Unity runner, v0.5.0)** | **272** |
+| **Total (Unity runner, v0.5.0)** | **274** |
 
 > **Note:** the category rows for `test_task.c` are approximate and do not
 > sum to the total; the canonical test count comes from the Unity runner
@@ -304,7 +304,7 @@ Run `cd tests && make test` to obtain current pass/fail results.
 
 | Test file | Tests |
 |-----------|------:|
-| `test_task.c` | 141 |
+| `test_task.c` | 143 |
 | `test_crc.c` | 8 |
 | `test_cdc_rx.c` | 7 |
 | `test_event.c` | 12 |
@@ -318,7 +318,7 @@ Run `cd tests && make test` to obtain current pass/fail results.
 | `test_svc_guard.c` | 7 |
 | `test_bkpram.c` | 5 |
 | `test_svc_policy.c` | 12 |
-| **Total** | **272** |
+| **Total** | **274** |
 
 **Static checks** (run by `make -C tests` before the Unity runner, or as
 noted):
@@ -364,4 +364,4 @@ The following requirements require target integration testing:
 | 0.1 | 2025-01-26 | Souham Biswas | Initial draft |
 | 0.2 | 2026-04-01 | Souham Biswas | Added SVC tests; updated counts to ~140; reconciled semaphore/pipe test names |
 | 0.3 | 2026-04-11 | Souham Biswas | Added 56 host tests for the v0.3.0 shared modules across `test_crc.c` (8), `test_cdc_rx.c` (7), `test_event.c` (9), `test_fs.c` (16), and `test_tables.c` (16); total bumped 140 → 196 |
-| 0.4 | 2026-09-27 | Souham Biswas | v0.5.0: BSP-030..032 (putchar line buffering) retired and replaced by HLR-BSP-028; added §3.18–§3.23 (checksum callback delivery, SVC caller-buffer validation, SVC wrapper rules, backup SRAM, USB CDC transmit ring, watchdog and K1 button); new rows for HLR-KRN-090.3, 092.3, 094.4–094.7; static checks traced; target-only paths added to §5; per-file test counts (272) |
+| 0.4 | 2026-09-27 | Souham Biswas | v0.5.0: BSP-030..032 (putchar line buffering) retired and replaced by HLR-BSP-028; added §3.18–§3.23 (checksum callback delivery, SVC caller-buffer validation, SVC wrapper rules, backup SRAM, USB CDC transmit ring, watchdog and K1 button); new rows for HLR-KRN-090.3, 092.3, 094.4–094.7; static checks traced; target-only paths added to §5; per-file test counts (274) |

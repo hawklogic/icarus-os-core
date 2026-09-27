@@ -130,7 +130,7 @@ hardware (HLR-BSP-027.6, HLR-BSP-027.7).
 
 The putchar line-buffering entries BSP-030..032 in the test traceability
 matrix are retired (see `verification/test_traceability.md` §3.10). The
-host suite has 272 tests (`make -C tests`, which first runs both SVC
+host suite has 274 tests (`make -C tests`, which first runs both SVC
 static checks).
 
 ## Design Assurance Level (DAL)

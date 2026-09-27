@@ -20,6 +20,28 @@ of the output written while closed is checked only on the host.
 
 ### Fixed
 
+- **Task switches lost floating-point state.**  The context switch saved
+  only r4-r11 and returned with the outgoing task's EXC_RETURN, so once a
+  task used the FPU (lazy stacking is on by default) another task could
+  resume with its s0-s31 and FPSCR, or unstack the wrong frame type.  The
+  switch now saves s16-s31 for tasks with an FP frame (which also
+  completes pending lazy stacking before the MPU is reprogrammed), keeps
+  EXC_RETURN per task, and starts cold tasks with 0xFFFFFFFD.  Host tests
+  cannot see this (the context switch is assembly, mocked on the host).
+  Evidence is a target probe: two tasks that fill s0-s31 with their own
+  patterns and check them after being switched out saw about 9,000
+  changed registers in 30 s before the fix and none in 28,000 rounds
+  (120 s) after it.
+- **`semaphore_consume_timeout()` stretched its timeout under load.**  It
+  counted loop iterations of `task_active_sleep(1)`, but each sleep lasts
+  until the waiter is scheduled again, a whole round of the other ready
+  tasks' slices when they are busy: with two CPU-bound tasks a 1000-tick
+  timeout took about 100 s, long enough to trip an application
+  watchdog.  The timeout is now measured on the tick counter (correct
+  across a wrap).  A host-only hook (`__sched_host_set_ticks_per_sleep`)
+  lets tests advance the tick during a sleep.  The unused SVC 58 dispatch
+  case, which ran the wait inside the handler (a nested SVC, HardFault),
+  now returns false.
 - **Console output could stall a task until the watchdog reset.**
   `CDC_Transmit_FS` read a NULL class handle before the host configured
   the device and reported BUSY forever, and `__io_putchar` retried with the
@@ -154,7 +176,7 @@ of the output written while closed is checked only on the host.
 
 - The host test suite links and runs again (`cs.c`, `sb.c`,
   `bootloader.c` were missing and a failing run was masked by `|| true`):
-  272 tests, run after the two static SVC checks.  CI runs it on every
+  274 tests, run after the two static SVC checks.  CI runs it on every
   push.
 - `svc_buffer_allowed()` takes the caller as a `const svc_caller_t *`
   (data-pool slot, main-stack window, whether the frame is on the process

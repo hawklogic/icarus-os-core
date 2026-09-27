@@ -143,12 +143,12 @@ Coverage reports show:
 
 ### Current Tests
 
-The kernel host suite is **272 tests** as of v0.5.0, organised across
+The kernel host suite is **274 tests** as of v0.5.0, organised across
 fourteen source files in `tests/src/`:
 
 | File | Tests | Coverage |
 |------|------:|----------|
-| `test_task.c` | 141 | Kernel core: scheduler, task lifecycle, semaphores, pipes, critical sections, SVC gates, MPU helpers — single Unity entry point (`main()`) |
+| `test_task.c` | 143 | Kernel core: scheduler, task lifecycle, semaphores, pipes, critical sections, SVC gates, MPU helpers — single Unity entry point (`main()`) |
 | `test_crc.c` | 8 | `crc16_ccitt` bytewise loop (HW peripheral path is short-circuited under HOST_TEST) — canonical CCITT-FALSE vector + edge cases |
 | `test_cdc_rx.c` | 7 | SPSC ring buffer fill/drain, FIFO order, capacity overflow, wraparound, empty/zero-length corner cases |
 | `test_event.c` | 12 | Generic event ring init/emit/drain, per-module squelch filtering, payload truncation, partial drain, full-ring overwrite, drain after wrap |

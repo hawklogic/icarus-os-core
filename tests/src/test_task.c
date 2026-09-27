@@ -1319,6 +1319,53 @@ void test_semaphore_consume_to_zero(void) {
 	TEST_ASSERT_EQUAL(0, semaphore_list[0]->count);
 }
 
+// Test: semaphore_consume_timeout - the timeout is measured on the tick, not
+// in sleep iterations.  Each sleep here lasts 100 ticks, as when two other
+// tasks use their full 50 ms slices before the waiter runs again.
+void test_semaphore_consume_timeout_counts_elapsed_ticks(void) {
+	test_init_task_list();
+	os_register_task(test_task_1, "timeout_ticks");
+	current_task_index = 0;
+
+	semaphore_init(0, 1);
+	semaphore_list[0]->count = 0;            // nothing to consume
+	os_tick_count = 5000;
+	test_reset_yield_count();
+	__sched_host_set_ticks_per_sleep(100u);
+
+	TEST_ASSERT_FALSE(semaphore_consume_timeout(0, 1000));
+	uint32_t elapsed = os_tick_count - 5000u;
+	__sched_host_set_ticks_per_sleep(0u);
+
+	// Gave up after about 1000 ticks (10 sleeps), not 1000 sleeps.
+	TEST_ASSERT_GREATER_OR_EQUAL_UINT32(1000u, elapsed);
+	TEST_ASSERT_LESS_THAN_UINT32(1100u, elapsed);
+	TEST_ASSERT_EQUAL(0, semaphore_list[0]->count);
+}
+
+// Test: semaphore_consume_timeout - available at once, and max_ticks == 0
+void test_semaphore_consume_timeout_immediate_and_try(void) {
+	test_init_task_list();
+	os_register_task(test_task_1, "timeout_try");
+	current_task_index = 0;
+
+	semaphore_init(0, 1);
+	os_tick_count = 0xFFFFFF00u;             // close to the tick wrap
+	__sched_host_set_ticks_per_sleep(100u);
+
+	TEST_ASSERT_TRUE(semaphore_consume_timeout(0, 1000));   // count 1 -> 0
+	TEST_ASSERT_EQUAL_UINT32(0xFFFFFF00u, os_tick_count);   // no sleep
+	TEST_ASSERT_FALSE(semaphore_consume_timeout(0, 0));     // try only
+	TEST_ASSERT_EQUAL_UINT32(0xFFFFFF00u, os_tick_count);
+
+	// Waiting across the wrap still ends after the timeout.
+	TEST_ASSERT_FALSE(semaphore_consume_timeout(0, 500));
+	uint32_t elapsed = os_tick_count - 0xFFFFFF00u;
+	__sched_host_set_ticks_per_sleep(0u);
+	TEST_ASSERT_GREATER_OR_EQUAL_UINT32(500u, elapsed);
+	TEST_ASSERT_LESS_THAN_UINT32(600u, elapsed);
+}
+
 // Test: semaphore_feed - feed to max_count
 void test_semaphore_feed_to_max(void) {
 	test_init_task_list();
@@ -2154,6 +2201,8 @@ int main(void) {
 	RUN_TEST(test_semaphore_consume_multiple);
 	RUN_TEST(test_semaphore_feed_consume_together);
 	RUN_TEST(test_semaphore_consume_to_zero);
+	RUN_TEST(test_semaphore_consume_timeout_counts_elapsed_ticks);
+	RUN_TEST(test_semaphore_consume_timeout_immediate_and_try);
 	RUN_TEST(test_semaphore_feed_to_max);
 	
 	// Message Pipe Tests

@@ -50,7 +50,7 @@ Figures below were produced with `cd tests && make COVERAGE=yes clean test cover
 
 > **v0.5.0 note:** the metrics in §3.1 and §3.2 are the v0.3.0 baseline
 > and have not been regenerated for v0.5.0. Since then the suite grew to
-> 272 tests, `sb.c`, `cs.c` and `bootloader.c` were linked into the host
+> 274 tests, `sb.c`, `cs.c` and `bootloader.c` were linked into the host
 > build, and `bsp/cdc.c` and `bsp/retarget_stdio.c` were rewritten. The
 > target-only branches added in v0.5.0 (SVC dispatch and per-gate buffer
 > checks, `svc_caller_is_privileged()` on target, the PRIMASK lock in
@@ -119,7 +119,7 @@ Re-run after changes. Example command:
 cd tests && make test
 ```
 
-The suite defines **272** tests as of v0.5.0 (141 in `test_task.c` plus 131 in the per-module aggregator files `test_crc.c`, `test_cdc_rx.c`, `test_event.c`, `test_fs.c`, `test_tables.c`, `test_tables_load.c`, `test_iwdg.c`, `test_button.c`, `test_cdc.c`, `test_stdio.c`, `test_svc_guard.c`, `test_bkpram.c`, `test_svc_policy.c`; per-file counts in `test_traceability.md` §4). `make -C tests` also runs `tools/check_svc_clobbers.py` and `tools/check_svc_pointer_checks.py` before the Unity runner. The v0.3.0 baseline was 196 tests. Record pass/fail counts from your baseline run in verification records.
+The suite defines **274** tests as of v0.5.0 (143 in `test_task.c` plus 131 in the per-module aggregator files `test_crc.c`, `test_cdc_rx.c`, `test_event.c`, `test_fs.c`, `test_tables.c`, `test_tables_load.c`, `test_iwdg.c`, `test_button.c`, `test_cdc.c`, `test_stdio.c`, `test_svc_guard.c`, `test_bkpram.c`, `test_svc_policy.c`; per-file counts in `test_traceability.md` §4). `make -C tests` also runs `tools/check_svc_clobbers.py` and `tools/check_svc_pointer_checks.py` before the Unity runner. The v0.3.0 baseline was 196 tests. Record pass/fail counts from your baseline run in verification records.
 
 ## 5. Coverage gap analysis
 
@@ -162,4 +162,4 @@ As documented in `deactivated_code.md`:
 |---------|------|--------|---------|
 | 0.1 | 2025-01-26 | Souham Biswas | Initial draft |
 | 0.2 | 2026-04-01 | Souham Biswas | Paths `Core/Src/icarus/`; refreshed metrics from host `lcov` |
-| 0.4 | 2026-09-27 | Souham Biswas | v0.5.0: scope table adds `sb.c`, `cs.c`, `cdc.c`, `bootloader.c`, `iwdg.c`, `button.c`; SVC count 94; test count 272; metrics flagged as the v0.3.0 baseline pending regeneration |
+| 0.4 | 2026-09-27 | Souham Biswas | v0.5.0: scope table adds `sb.c`, `cs.c`, `cdc.c`, `bootloader.c`, `iwdg.c`, `button.c`; SVC count 94; test count 274; metrics flagged as the v0.3.0 baseline pending regeneration |
