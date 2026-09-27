@@ -134,6 +134,9 @@ bool sb_unsubscribe(sb_msg_id_t msg_id, uint8_t pipe_idx);
  *
  * @note   Never blocks.  Uses pipe_can_enqueue() to test capacity
  *         before each write.
+ * @note   From an unprivileged task, a @p data buffer the task may not pass
+ *         to the kernel (see svc_buffer_allowed()) returns 0 and nothing is
+ *         enqueued to any subscriber.
  */
 uint8_t sb_publish(sb_msg_id_t msg_id, const uint8_t *data, uint8_t len);
 

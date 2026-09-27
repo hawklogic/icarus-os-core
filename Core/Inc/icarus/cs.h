@@ -143,7 +143,10 @@ void cs_set_callback(cs_mismatch_fn fn);
  * @param[in] size  Size in bytes (must be > 0).
  *
  * @retval true   Region registered; baseline CRC computed and stored.
- * @retval false  Invalid index, NULL addr, or zero size.
+ * @retval false  Invalid index, NULL addr, or zero size; or, from an
+ *                unprivileged task, a region the task may not pass to the
+ *                kernel for reading (see svc_buffer_allowed()), in which
+ *                case nothing is registered.
  *
  * @note   The baseline CRC is computed immediately from the current
  *         memory contents.  Call this after the region is fully
@@ -191,7 +194,9 @@ uint8_t cs_check_all(void);
  * @param[in]  idx  Region index.
  * @param[out] out  Destination for the region descriptor.
  * @retval true   Success.
- * @retval false  Invalid index or out is NULL.
+ * @retval false  Invalid index or out is NULL; or, from an unprivileged
+ *                task, @p out is not writable through the kernel (see
+ *                svc_buffer_allowed()) and is left untouched.
  */
 bool cs_get_region(uint8_t idx, cs_region_t *out);
 

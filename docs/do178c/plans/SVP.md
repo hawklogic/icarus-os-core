@@ -1,8 +1,8 @@
 # Software Verification Plan (SVP)
 
 **Document ID:** ICARUS-SVP-001
-**Version:** 0.3
-**Date:** 2026-04-11
+**Version:** 0.4
+**Date:** 2026-09-27
 **Status:** Draft
 **Classification:** Public (Open Source)
 
@@ -25,6 +25,7 @@
 | 0.1 | 2025-01-26 | Souham Biswas | Initial draft |
 | 0.2 | 2026-04-01 | Souham Biswas | Added §4.5 Memory Protection Tests with red-team attack vectors and fault recovery verification |
 | 0.3 | 2026-04-11 | Souham Biswas | Added §4.6 Shared Service Module Tests for the v0.3.0 modules; updated §5.4 coverage baseline (91.8% line / 92.5% function across 196 host tests) |
+| 0.4 | 2026-09-27 | Souham Biswas | v0.5.0: added §4.7 Robustness Tests (CDC transmit ring, console retarget, SVC caller-buffer policy, nested-SVC guard, backup SRAM, table load extensions); added the SVC static checks to §6.1 and §6.4; host baseline 272 tests |
 
 ---
 
@@ -286,6 +287,50 @@ zero failures. The previous baseline was 140/140 — the +56 tests
 brought total kernel coverage back to 91.8% line / 92.5% function
 after the new modules expanded the coverage denominator.
 
+### 4.7 Robustness Tests (v0.5.0)
+
+**Scope:** Verify the v0.5.0 robustness changes. Each behaviour below
+has a host test or a static check guarding it; most were first seen
+failing on target hardware.
+
+**Location:** `tests/src/test_<module>.c`, each with a
+`run_<module>_tests()` aggregator called from `test_task.c`.
+
+| File | Tests | Verifies | Notes |
+|---|---:|---|---|
+| `test_cdc.c` | 21 | HLR-BSP-027 to HLR-BSP-027.7 | `CDC_Write` / `CDC_WriteString` contract; ring ordering across text and binary writes; all-or-nothing vs partial; chunk cap and wrap-around; completion advances the tail; not-configured then configured; output queued before a host attaches is sent on port open; a link reset clears a wedged transfer; a foreign busy endpoint leaves data queued; port close discards the queued bytes but keeps the transfer in flight (also with a wrapped head, and when idle or empty); a reopen drops output written while the port was closed, and a report that does not change DTR drops nothing; the first open since boot keeps earlier output, and a link loss while open counts as a close; NULL/empty rejected. Manual completion is driven through the `__cdc_host_*` hooks |
+| `test_stdio.c` | 7 | HLR-BSP-028 to HLR-BSP-028.2 | Console bytes reach the ring in order; not-configured and busy endpoint never wait; a full ring drops and counts; output recovers after drops; NULL/empty rejected |
+| `test_svc_policy.c` | 12 | HLR-KRN-074.1–074.3, 074.6, 074.7, HLR-KRN-077 | `svc_buffer_allowed()` with the target memory map: flash and ITCM readable not writable; RAM_D1 including straddling ranges; main-stack window rejected for a task caller (read and write, including straddling ranges) and allowed for main-stack boot code; no window configured; NULL caller rejected; application DTCM half allowed, kernel half rejected; own data-pool slot only; privileged, device and system space rejected; NULL and wrap rejected, zero length allowed |
+| `test_svc_guard.c` | 7 | HLR-KRN-076, HLR-KRN-096.2 | Nested gates detected, sequential gates allowed, depth unwinds; checksum mismatch callbacks may call kernel APIs (delivered in thread mode) |
+| `test_bkpram.c` | 5 | HLR-KRN-078, HLR-KRN-078.1, HLR-KRN-078.2 | Round trip; last byte accepted, one past rejected; zero length and NULL rejected; offset wrap rejected; data survives simulated resets until cleared |
+| `test_tables_load.c` | 10 | HLR-KRN-094.4 to HLR-KRN-094.7, HLR-KRN-092.3, HLR-KRN-090.3 | Identical retransmit idempotent; conflicting retransmit, gap, overrun and mixed schema rejected; abort; commit without prepare rejected; `tbl_get_info` copy-out; CRC wrapper matches the privileged implementation; CDC RX drop counter |
+
+**Static checks:**
+
+| Check | Verifies | When |
+|---|---|---|
+| `tools/check_svc_clobbers.py` | HLR-KRN-075, HLR-KRN-075.1: every SVC inline-asm block clobbers `"memory"` | `make -C tests` target `check-svc-asm`, before the Unity runner |
+| `tools/check_svc_pointer_checks.py` | HLR-KRN-074, HLR-KRN-074.8: every SVC dispatch case that turns a caller argument into a pointer validates it first | `make -C tests` target `check-svc-ptr`, before the Unity runner |
+
+**Target-only behaviour** (host builds cannot observe it; verified by
+target integration test and review, see `test_traceability.md` §5): the
+per-gate buffer checks inside `SVC_Handler_C()`, handler-mode detection in
+`svc_caller_is_privileged()`, task/main-stack caller classification in
+`svc_current_caller()` (and, by review only, that the main stack stays
+within `_Min_Stack_Size`), the PRIMASK lock around the transmit ring,
+retention of backup SRAM across a real reset, and the ROM bootloader
+entry (HLR-BSP-029).
+
+The USB callbacks that drive the transmit ring on DTR changes, link loss
+and bus resume are not built on the host; the ring functions they call
+are host-tested. Close and reopen are exercised on hardware (the device
+keeps working across a 30 s close and reopen); the discard behaviour is
+host-tested only. The bus-resume path (PHY clock restart, then kick) is
+host-tested only and not exercised on hardware.
+
+**Pass criteria (v0.5.0 baseline):** 272/272 host tests passing, zero
+failures, and both SVC static checks passing.
+
 
 ---
 
@@ -357,6 +402,8 @@ See `ICARUS-VER-002 Deactivated Code Analysis` for complete list.
 | **PC-lint Plus** | MISRA C:2012 | DAL C rule subset |
 | **Clang-Tidy** | Modern C analysis | cert-*, bugprone-* |
 | **Coverity** | Deep analysis | Planned (CI integration) |
+| **check_svc_clobbers.py** | SVC inline asm has a `"memory"` clobber | `tools/`; run by `make -C tests` (see §6.4) |
+| **check_svc_pointer_checks.py** | SVC dispatch cases validate caller pointers | `tools/`; run by `make -C tests` (see §6.4) |
 
 ### 6.2 MISRA Compliance
 
@@ -382,6 +429,25 @@ See `ICARUS-VER-002 Deactivated Code Analysis` for complete list.
 | Function length | ≤100 lines | Refactor recommended |
 | Nesting depth | ≤4 levels | Refactor required |
 | Parameters | ≤6 | Consider struct |
+
+### 6.4 SVC Static Checks (v0.5.0)
+
+Host tests call the privileged implementations directly and never
+execute the SVC inline assembly or the target dispatcher, so two classes
+of defect are invisible to them. Two project scripts guard them:
+
+| Script | Rule | Failure mode it prevents | Requirement |
+|--------|------|--------------------------|-------------|
+| `tools/check_svc_clobbers.py` | Every `__asm__ volatile` block that contains an `svc` instruction lists `"memory"` in its clobbers (default scope: `Core/Src/**/*.c`) | At -O2 the compiler keeps memory in registers across the SVC or assumes an out-parameter is unchanged; `tbl_activate()` read its out-parameters before the handler wrote them and every activation failed on target | HLR-KRN-075, HLR-KRN-075.1 |
+| `tools/check_svc_pointer_checks.py` | In every SVC dispatch `switch`, each cast of a caller argument (or an expression built from it) to a data pointer is preceded, in the same case, by a caller-buffer validator on that argument; function-pointer casts only in allowlisted cases; unknown cast types and stale allowlist entries fail | A task makes the kernel copy, with privilege, into or out of memory it does not own; a new gate forgets the check | HLR-KRN-074, HLR-KRN-074.8 |
+
+Both scripts exit non-zero and name each offending file and line. The
+`check-svc-asm` and `check-svc-ptr` targets in `tests/Makefile` run them
+before the Unity runner, so a missing clobber or an unvalidated caller
+pointer fails `make -C tests` and CI. `check_svc_pointer_checks.py` is
+textual: it does not prove that the validator's result gates the use or
+that the length passed to it is right (the host policy tests cover the
+policy itself).
 
 
 ---
@@ -459,7 +525,9 @@ make coverage-summary        # Show coverage summary
 make coverage-html           # Generate HTML report
 
 # Expected output (example, will evolve):
-# 140 Tests 0 Failures 0 Ignored
+# check_svc_clobbers: N files OK
+# check_svc_pointer_checks: 1 dispatch, N cases, ... OK
+# 272 Tests 0 Failures 0 Ignored
 # ~91% lines, ~89.5% functions (host, filtered kernel+BSP)
 ```
 

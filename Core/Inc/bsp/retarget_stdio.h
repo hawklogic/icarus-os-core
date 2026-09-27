@@ -2,14 +2,30 @@
  * @file    retarget_stdio.h
  * @brief   printf retarget to USB CDC — non-blocking console output
  *
- * @details newlib's `_write()` (and `__io_putchar()` for single characters)
- *          copy console output into the USB CDC transmit ring
- *          (`bsp/cdc.h`), the same ring that carries raw `CDC_Write()`
- *          traffic, so text and binary output keep their order.  Output never
- *          blocks, sleeps or spins and is safe from any task or handler:
- *          bytes that do not fit in the ring (host not reading, or device
- *          not configured for long enough to fill it) are dropped and
- *          counted so the application can report them.
+ * @details The strong `_write()` below copies newlib's console output into
+ *          the USB CDC transmit ring (`bsp/cdc.h`), the same ring that
+ *          carries raw `CDC_Write()` traffic, so text and binary output keep
+ *          their order.  Output never blocks, sleeps or spins: bytes that do
+ *          not fit in the ring (host not reading, or device not configured
+ *          for long enough to fill it) are dropped and counted so the
+ *          application can report them.
+ *
+ *          Concurrency:
+ *          - Each `_write()` / `stdio_write()` call is atomic: its bytes
+ *            are copied into the ring in one step with interrupts masked,
+ *            so no other producer lands in the middle of them.  Both are
+ *            safe from tasks and from interrupt handlers that PRIMASK masks
+ *            (every configurable-priority handler; not NMI or HardFault).
+ *          - `printf()` and the other stdio functions are not.  newlib-nano
+ *            formats into the stdout `FILE` buffer, which all callers share,
+ *            and its lock hooks (`__retarget_lock_*`) are the library's
+ *            no-op stubs in this build, so nothing locks that buffer.
+ *            Concurrent `printf()` from preemptive tasks (or from a task
+ *            and an interrupt handler) can interleave or duplicate
+ *            characters.  Callers that need whole lines must serialise
+ *            their `printf()` calls, for example inside a critical section
+ *            or from a single task, or format into their own buffer and
+ *            call `stdio_write()`.
  *
  *          Output is not line-buffered here: newlib's own stdout buffering
  *          decides when `_write()` is called.
@@ -37,11 +53,20 @@ extern "C" {
  * @param[in] len   Byte count.
  * @return Bytes queued; the rest were dropped and added to
  *         stdio_get_tx_dropped().
+ * @note   Atomic with respect to other producers (one masked copy into the
+ *         ring for up to 65535 bytes); callable from tasks and
+ *         configurable-priority handlers.
+ *         From an unprivileged task, @p data must be a buffer the task may
+ *         pass to the kernel (see svc_buffer_allowed()); otherwise nothing
+ *         is queued and all @p len bytes count as dropped.
  */
 uint32_t stdio_write(const uint8_t *data, uint32_t len);
 
 /**
- * @brief  Retarget hook used by newlib for single characters.
+ * @brief  Legacy single-character entry for code that calls it directly.
+ * @details newlib does not use it: its output reaches the ring only
+ *          through the strong `_write()` (which replaces the weak
+ *          syscalls.c version that looped over this function).
  * @param  ch  Character to output.
  * @return The character written (also when it was dropped).
  */
@@ -55,6 +80,8 @@ int __io_putchar(int ch);
  * @param  len   Byte count.
  * @return @p len — dropped bytes are counted, not reported, so newlib never
  *         retries or marks stdout as failed.
+ * @note   Atomic per call, but see the file description: the stdout `FILE`
+ *         buffer in front of it is not locked.
  */
 int _write(int file, char *ptr, int len);
 #endif

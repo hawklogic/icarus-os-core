@@ -40,8 +40,12 @@ bool pipe_init(uint8_t pipe_idx, uint16_t pipe_capacity_bytes);
  * @param pipe_idx      Pipe index
  * @param message       Data to enqueue
  * @param message_bytes Number of bytes
- * @return true on success
+ * @return true on success; false if the pipe is invalid or @p message was
+ *         rejected
  * @note  Blocks if insufficient space
+ * @note  From an unprivileged task, @p message is checked after the wait
+ *        for space: a buffer the task may not pass to the kernel (see
+ *        svc_buffer_allowed()) returns false and nothing is enqueued.
  * @note  Placed in ITCM for zero wait-state execution
  */
 bool pipe_enqueue(uint8_t pipe_idx, uint8_t* message, uint8_t message_bytes);
@@ -51,8 +55,12 @@ bool pipe_enqueue(uint8_t pipe_idx, uint8_t* message, uint8_t message_bytes);
  * @param pipe_idx      Pipe index
  * @param message       Buffer to receive data
  * @param message_bytes Number of bytes to read
- * @return true on success
+ * @return true on success; false if the pipe is invalid or @p message was
+ *         rejected
  * @note  Blocks if insufficient data
+ * @note  From an unprivileged task, @p message is checked after the wait
+ *        for data: a buffer the task may not write through the kernel (see
+ *        svc_buffer_allowed()) returns false and the bytes stay in the pipe.
  * @note  Placed in ITCM for zero wait-state execution
  */
 bool pipe_dequeue(uint8_t pipe_idx, uint8_t* message, uint8_t message_bytes);

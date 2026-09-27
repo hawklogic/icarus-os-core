@@ -18,6 +18,13 @@
  *            step with respect to the USB interrupt and to other producers.
  *            The masked window is one copy of at most the free ring space
  *            plus one transfer start.  Nothing in this file waits.
+ *            PRIMASK does not mask NMI or HardFault, so those handlers must
+ *            not write to the ring.
+ *          - When the host closes the port, and again when it reopens it,
+ *            the queued bytes that are not in flight are discarded (and
+ *            counted as dropped).  A transfer already in flight when the
+ *            port closed can still reach the next open (at most
+ *            CDC_TX_MAX_CHUNK bytes).
  *
  *          The USB stack reads the ring from its interrupt with the CPU
  *          (the OTG FS core runs without DMA), so privileged DTCM is a valid
@@ -65,6 +72,8 @@ DTCM_DATA_PRIV static uint32_t tx_tail;      /**< Oldest queued byte.           
 DTCM_DATA_PRIV static uint32_t tx_count;     /**< Queued bytes, incl. in flight. */
 DTCM_DATA_PRIV static uint32_t tx_inflight;  /**< Bytes owned by USB (0 = idle). */
 DTCM_DATA_PRIV static uint32_t tx_dropped;   /**< Bytes refused or dropped.      */
+DTCM_DATA_PRIV static bool     tx_dtr;       /**< Host DTR as last reported.     */
+DTCM_DATA_PRIV static bool     tx_opened;    /**< Port opened since boot.        */
 
 #ifdef HOST_TEST
 /* ---- Host capture and simulation state ---------------------------------- */
@@ -248,6 +257,40 @@ ITCM_FUNC void __cdc_tx_kick(void) {
 #endif
 }
 
+/** @copydoc __cdc_tx_discard_queued */
+ITCM_FUNC uint32_t __cdc_tx_discard_queued(void) {
+    uint32_t key = tx_lock();
+    /* The in-flight run stays: the USB stack still reads it from the ring
+     * and its completion releases it as usual. */
+    uint32_t n = tx_count - tx_inflight;
+    tx_head     = (tx_tail + tx_inflight) % (uint32_t)CDC_TX_RING_SIZE;
+    tx_count    = tx_inflight;
+    tx_dropped += n;
+    tx_unlock(key);
+    return n;
+}
+
+/** @copydoc __cdc_tx_on_dtr */
+ITCM_FUNC uint32_t __cdc_tx_on_dtr(bool asserted) {
+    uint32_t n = 0u;
+    uint32_t key = tx_lock();
+    if (asserted != tx_dtr) {
+        /* A host that closed the port stops reading, so what it would get
+         * on the next open was written while nobody was listening: drop it
+         * on the close and again on every open after the first.  The first
+         * open keeps what was queued before it (boot output). */
+        if (!asserted || tx_opened) {
+            n = __cdc_tx_discard_queued();
+        }
+        if (asserted) {
+            tx_opened = true;
+        }
+        tx_dtr = asserted;
+    }
+    tx_unlock(key);
+    return n;
+}
+
 /** @copydoc __cdc_tx_queued */
 uint32_t __cdc_tx_queued(void) {
     return tx_count;
@@ -342,6 +385,8 @@ void __cdc_host_reset_state(void) {
     tx_count    = 0u;
     tx_inflight = 0u;
     tx_dropped  = 0u;
+    tx_dtr      = false;
+    tx_opened   = false;
 
     (void)memset(g_cdc_sink, 0, sizeof(g_cdc_sink));
     g_cdc_sink_len      = 0u;

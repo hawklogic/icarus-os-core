@@ -1085,7 +1085,7 @@ ICARUS OS is being developed to support DO-178C DAL C certification objectives. 
 |-----------|--------|
 | Static analysis (cppcheck) | ✅ Complete |
 | MISRA C:2012 subset | ✅ Complete |
-| Unit testing (Unity) | ✅ 213 tests |
+| Unit testing (Unity) | ✅ 272 tests |
 | Line coverage | ✅ ~91% (host `lcov`, kernel+BSP under test) |
 | Function coverage | ✅ ~89.5% |
 | Requirements traceability | ✅ SRS complete |
@@ -1131,7 +1131,7 @@ ICARUS OS is in active development with core functionality complete and undergoi
 - ✅ Demo tasks (12 producer/consumer patterns)
 - ✅ Stress testing (19 tasks, 10+ min stability)
 - ✅ Showcase demo (3 tasks exercising all five shared modules end-to-end)
-- ✅ Unit testing (213 tests; 91.8% statement coverage on exercised kernel/BSP sources — see `tests/README.md`)
+- ✅ Unit testing (272 tests; 91.8% statement coverage measured at v0.3.0 on exercised kernel/BSP sources — see `tests/README.md`)
 - ✅ Static analysis (cppcheck clean)
 - ✅ MISRA C:2012 compliance
 - ✅ DO-178C documentation (plans, requirements, design, verification)

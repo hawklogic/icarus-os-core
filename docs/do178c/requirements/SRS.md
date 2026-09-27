@@ -1,8 +1,8 @@
 # Software Requirements Specification (SRS)
 
 **Document ID:** ICARUS-SRS-001
-**Version:** 0.4
-**Date:** 2026-06-15
+**Version:** 0.5
+**Date:** 2026-09-27
 **Status:** Draft
 **Classification:** Public (Open Source)
 
@@ -26,6 +26,7 @@
 | 0.2 | 2026-04-01 | Souham Biswas | Added 14 memory protection requirements (HLR-KRN-063 to HLR-KRN-086) |
 | 0.3 | 2026-04-11 | Souham Biswas | Added 5 shared service module requirements (HLR-KRN-090 to HLR-KRN-094): CDC RX ring buffer, event ring + squelch, CRC16 helper, internal filesystem, ground-loadable table engine |
 | 0.4 | 2026-06-15 | Souham Biswas | Added Software Bus (HLR-KRN-095), Background Checksum (HLR-KRN-096), task restart (HLR-KRN-097), timed semaphore (HLR-KRN-098), wider pipes (HLR-KRN-053 updated), task diagnostics (HLR-KRN-099), BSP watchdog/button/CDC write (HLR-BSP-025 to HLR-BSP-027) |
+| 0.5 | 2026-09-27 | Souham Biswas | v0.5.0: HLR-BSP-027 rewritten for the shared non-blocking USB CDC transmit ring (HLR-BSP-027.1 to HLR-BSP-027.7, including discard on port close and reopen); console retarget with partial writes and drop counter (HLR-BSP-028) replaces putchar line buffering; ROM bootloader entry (HLR-BSP-029); SVC caller-buffer validation, main-stack exclusion and pointer-check static check (HLR-KRN-074); SVC wrapper rules (HLR-KRN-075 to HLR-KRN-077); backup SRAM gates and MPU region (HLR-KRN-078); CDC RX drop counter (HLR-KRN-090.3); CRC via SVC (HLR-KRN-092.3); offset table load, abort, info and commit gating (HLR-KRN-094.4 to HLR-KRN-094.7); HLR-KRN-096.2 (callbacks in thread mode) and HLR-BSP-026 (K1 pressed level) corrected; §7.2 recounted |
 
 ---
 
@@ -153,6 +154,22 @@ The following system-level requirements are allocated to ICARUS OS:
 | HLR-KRN-071 | The kernel shall prevent cross-task memory access | Must | ✅ Implemented |
 | HLR-KRN-072 | The kernel shall recover from recoverable memory faults | Must | ✅ Implemented |
 | HLR-KRN-073 | The kernel shall support memory partitioning (ARINC 653) | Could | Planned |
+| HLR-KRN-074 | Every SVC whose privileged implementation reads or writes caller-supplied memory shall validate the whole buffer, for the access it makes, before touching it | Must | ✅ Implemented |
+| HLR-KRN-074.1 | A buffer the kernel writes shall lie wholly inside RAM_D1 (less the main-stack window for task callers, HLR-KRN-074.7), the application (upper) half of DTCM (MPU region 3), or the calling task's own data-pool slot | Must | ✅ Implemented |
+| HLR-KRN-074.2 | A buffer the kernel only reads may in addition lie in internal flash or ITCM; address 0 (NULL) shall never be accepted as a buffer start, which also excludes the first byte of ITCM | Must | ✅ Implemented |
+| HLR-KRN-074.3 | All other memory shall be rejected: the privileged DTCM half, other tasks' data-pool slots, SRAM4, backup SRAM, peripherals, the system control space and unmapped addresses. A range that wraps the address space or spans two regions shall be rejected; a zero-length buffer shall be accepted and not touched | Must | ✅ Implemented |
+| HLR-KRN-074.4 | A call whose buffer is rejected shall return its documented failure value and shall not read or write memory through the rejected pointer | Must | ✅ Implemented |
+| HLR-KRN-074.5 | A NUL-terminated string passed to the kernel shall be validated byte by byte, up to its maximum length, before each byte is read | Must | ✅ Implemented |
+| HLR-KRN-074.6 | The allowlist policy shall be a pure function of address, length, access and a description of the caller (data-pool slot, main-stack window, stack the exception frame is on; `svc_buffer_allowed()`) so that it can be verified on the host against the target memory map; a missing caller description shall never grant access | Should | ✅ Implemented |
+| HLR-KRN-074.7 | For a caller whose exception frame is on the process stack (a task), a buffer that overlaps the main-stack window at the top of RAM_D1 (`_estack` − `_Min_Stack_Size` up to `_estack`, which holds the SVC handler's own frame) shall be rejected for reads and writes. Privileged code still running on the main stack (boot code) may pass buffers there. Assumption: the window covers the handler's frame only while everything on the main stack (the `main()` / `os_start()` frames, which are never unwound, the SVC handler and nested interrupts) stays within `_Min_Stack_Size`; MSP is not yet reset at first-task launch (SDD §4.2.8) | Must | ✅ Implemented |
+| HLR-KRN-074.8 | A static check (`tools/check_svc_pointer_checks.py`), run by `make -C tests` before the host suite, shall fail when an SVC dispatch case casts a caller argument (or an expression built from it) to a data pointer without a caller-buffer validator on that argument earlier in the same case, or casts one to a function pointer outside a documented allowlist | Should | ✅ Implemented |
+| HLR-KRN-075 | Every inline-assembly block that issues an SVC shall declare a `"memory"` clobber, so the compiler neither keeps memory values in registers across the call nor assumes that memory whose address was passed to the handler is unchanged | Must | ✅ Implemented |
+| HLR-KRN-075.1 | A static check (`tools/check_svc_clobbers.py`) shall fail the host test run (`make -C tests`) if any SVC inline-assembly block lacks the `"memory"` clobber | Must | ✅ Implemented |
+| HLR-KRN-076 | Host builds shall detect a nested supervisor call: entering a wrapper whose implementation runs inside the SVC handler on target, while another such wrapper's implementation is running, shall be reported and by default abort the test run (`SVC_HOST_GATE`). Wrappers that run thread-mode code on target shall not hold a gate while that code runs: spin loops only gate their individual SVC calls, `tbl_activate` gates its prepare and commit steps but not the callback between them, and `cdc_tx_write` opens no gate | Must | ✅ Implemented |
+| HLR-KRN-077 | Kernel services that may be called from handler mode or privileged thread mode (`cdc_tx_write`, `crc16_ccitt`) shall call their privileged implementation directly instead of issuing an SVC (`svc_caller_is_privileged()`) | Must | ✅ Implemented |
+| HLR-KRN-078 | The kernel shall provide SVC-gated copy-in and copy-out for the 4 KB backup SRAM at 0x38800000 (`bkpram_write`, SVC 71; `bkpram_read`, SVC 86) so unprivileged tasks can keep data across resets without an MPU grant | Must | ✅ Implemented |
+| HLR-KRN-078.1 | Backup SRAM accesses shall reject a zero length, an offset or range outside the backup SRAM (including offset + length overflow) and a caller buffer not allowed by HLR-KRN-074, without touching memory | Must | ✅ Implemented |
+| HLR-KRN-078.2 | The backup SRAM shall be mapped by its own MPU region (region 8) as privileged read/write, non-cacheable and execute-never, so data written is in the SRAM when the call returns and survives a system or watchdog reset | Must | ✅ Implemented |
 
 #### 3.1.7 Fault Handling
 
@@ -180,6 +197,7 @@ the detailed design.
 | HLR-KRN-090 | The kernel shall provide a single-producer / single-consumer USB CDC receive ring buffer with capacity ≥ 256 bytes, callable from a privileged ISR producer and an unprivileged thread-mode consumer | Must | ✅ Implemented |
 | HLR-KRN-090.1 | The CDC RX ring buffer shall not block the USB ISR — overflow shall silently drop incoming bytes rather than wait | Must | ✅ Implemented |
 | HLR-KRN-090.2 | Thread-mode consumer reads of the CDC RX ring shall route through SVC gates so the ring data may live in privileged-only DTCM | Must | ✅ Implemented |
+| HLR-KRN-090.3 | The CDC RX ring shall count the bytes dropped on overflow since the last `cdc_rx_init()`; unprivileged tasks shall read the count through `cdc_rx_dropped()` (SVC 91) | Should | ✅ Implemented |
 | HLR-KRN-091 | The kernel shall provide a generic structured event ring buffer with per-module severity squelch filtering | Must | ✅ Implemented |
 | HLR-KRN-091.1 | Event entries shall be fixed at 16 bytes (header + ≤12 byte payload) for deterministic memory budget | Must | ✅ Implemented |
 | HLR-KRN-091.2 | The event module shall be transport-agnostic — it shall drain into a caller-provided buffer rather than encoding any specific telemetry format | Must | ✅ Implemented |
@@ -187,6 +205,7 @@ the detailed design.
 | HLR-KRN-092 | The kernel shall provide a CRC16-CCITT helper (polynomial 0x1021, initial value 0xFFFF, no reflection) | Must | ✅ Implemented |
 | HLR-KRN-092.1 | On STM32H7 target, the CRC16 helper shall use the on-chip CRC peripheral on the AHB4 bus rather than a software loop | Should | ✅ Implemented |
 | HLR-KRN-092.2 | A portable software fallback shall be available under HOST_TEST so unit tests run unchanged off-target | Must | ✅ Implemented |
+| HLR-KRN-092.3 | `crc16_ccitt()` called from unprivileged thread mode shall compute through `SVC_CRC16_CCITT` (89), which validates the input buffer (HLR-KRN-074); privileged code and handlers shall call the implementation directly | Must | ✅ Implemented |
 | HLR-KRN-093 | The kernel shall provide a minimal flat-file storage layer with create/open/read/write/delete/list/stats operations | Must | ✅ Implemented |
 | HLR-KRN-093.1 | The filesystem shall support at least 16 named files of at least 2 KB each, totalling at least 32 KB capacity | Must | ✅ Implemented |
 | HLR-KRN-093.2 | The on-disk format shall be opaque to allow a real flash backend to be substituted later without changing the public API | Should | ✅ Implemented |
@@ -194,13 +213,17 @@ the detailed design.
 | HLR-KRN-094.1 | Table activation shall be gated by both a schema CRC and a data CRC16; mismatches shall reject the activation atomically | Must | ✅ Implemented |
 | HLR-KRN-094.2 | The activate callback registered by a table producer shall execute in unprivileged thread mode against a stack scratch copy of the staged bytes — never against the live DTCM_PRIV staging buffer | Must | ✅ Implemented |
 | HLR-KRN-094.3 | The active table buffer shall not be modified until the activate callback returns success | Must | ✅ Implemented |
+| HLR-KRN-094.4 | The table engine shall accept offset-addressed chunks (`tbl_load_at`, SVC 92). Offset 0 starts a new load, except that an identical copy of the first chunk sent while that load is still incomplete is treated as a retransmit. The retransmit and schema-CRC rules apply to chunks at offset > 0: each next chunk starts where the staged data ends; a chunk wholly inside the bytes already staged shall be accepted only if identical (retransmit); gaps, conflicting retransmits and a schema CRC that differs from the first chunk's shall be rejected without modifying staging. A chunk that overruns the descriptor size shall be rejected at any offset | Must | ✅ Implemented |
+| HLR-KRN-094.5 | `tbl_abort` (SVC 88) shall discard the staged, not yet activated bytes of a table and leave its active buffer unchanged | Must | ✅ Implemented |
+| HLR-KRN-094.6 | `tbl_get_info` (SVC 87) shall copy a table's descriptor fields and staging/active state into caller memory, so unprivileged tasks never dereference a descriptor pointer that refers to privileged memory | Must | ✅ Implemented |
+| HLR-KRN-094.7 | The activate commit shall be accepted only right after a successful activate prepare for the same table, with the descriptor-size length and data identical to what was staged | Must | ✅ Implemented |
 | HLR-KRN-095 | The kernel shall provide a lightweight pub/sub Software Bus that routes messages by ID to subscriber pipes | Must | ✅ Implemented |
 | HLR-KRN-095.1 | The Software Bus shall support at least 32 distinct message routes with up to 4 subscribers per route | Must | ✅ Implemented |
 | HLR-KRN-095.2 | Publishing shall be best-effort: if a subscriber's pipe is full the message shall be silently dropped for that subscriber without blocking the publisher | Must | ✅ Implemented |
 | HLR-KRN-095.3 | The Software Bus route table shall reside in DTCM_DATA_PRIV; hot-path functions shall be placed in ITCM_FUNC | Must | ✅ Implemented |
 | HLR-KRN-096 | The kernel shall provide a periodic background checksum integrity monitor using CRC16-CCITT over registered memory regions | Must | ✅ Implemented |
 | HLR-KRN-096.1 | The checksum monitor shall support at least 8 independently enabled memory regions with baselines captured at registration time | Must | ✅ Implemented |
-| HLR-KRN-096.2 | CRC mismatches shall be reported through a user-supplied callback invoked from within cs_check_all() | Must | ✅ Implemented |
+| HLR-KRN-096.2 | CRC mismatches shall be reported through a user-supplied callback that cs_check_all() invokes in the calling task's thread mode after the privileged scan has returned — never inside the SVC handler — so the callback may call any kernel API | Must | ✅ Implemented |
 | HLR-KRN-096.3 | The checksum module shall perform a hardware CRC self-test at initialization (expected value 0x29B1) | Must | ✅ Implemented |
 | HLR-KRN-097 | The kernel shall provide os_restart_task(task_index) to cold-restart a killed or finished task in-place from its original entry point without allocating a new stack slot | Must | ✅ Implemented |
 | HLR-KRN-097.1 | os_restart_task shall only accept tasks in TASK_STATE_KILLED or TASK_STATE_FINISHED; the restarted task shall enter the scheduler as TASK_STATE_COLD | Must | ✅ Implemented |
@@ -244,8 +267,33 @@ the detailed design.
 | HLR-BSP-021 | The BSP shall support high-resolution timer | Should | Planned |
 | HLR-BSP-022 | The BSP shall support RTC for wall-clock time | Should | ✅ Implemented |
 | HLR-BSP-025 | The BSP shall provide an Independent Watchdog (IWDG) abstraction with init, refresh, reset-reason query, and flag clear | Must | ✅ Implemented |
-| HLR-BSP-026 | The BSP shall provide a K1 user button read function returning the raw active-low pin state | Must | ✅ Implemented |
-| HLR-BSP-027 | The BSP shall provide a CDC raw write helper (CDC_Write, CDC_WriteString) with busy-retry via task_active_sleep | Must | ✅ Implemented |
+| HLR-BSP-026 | The BSP shall provide a K1 user button read function that returns true while the button is held, i.e. while the pin reads `BSP_KEY_PRESSED_LEVEL` (PC13 is active high on the reference board) | Must | ✅ Implemented |
+
+#### 3.2.4 USB CDC Output
+
+All output to the USB CDC IN endpoint shares one transmit ring owned by
+privileged code. See SDD §3.11 for the design.
+
+| ID | Requirement | Priority | Status |
+|----|-------------|----------|--------|
+| HLR-BSP-027 | The BSP shall provide a non-blocking raw CDC write (`CDC_Write`, `CDC_WriteString`) that queues either all of the caller's bytes on the USB CDC transmit ring or none of them, and returns false when the ring lacks room; it shall never wait, sleep or retry | Must | ✅ Implemented |
+| HLR-BSP-027.1 | All USB CDC IN-endpoint output (`printf` through `_write()`, `__io_putchar`, `CDC_Write`, `cdc_tx_write`) shall pass through one transmit ring of `CDC_TX_RING_SIZE` bytes (default 4096) in privileged DTCM, so bytes from different producers are sent in the order they were queued | Must | ✅ Implemented |
+| HLR-BSP-027.2 | `cdc_tx_write` shall offer an all-or-nothing mode and a partial mode that queues what fits, and shall count the bytes refused or dropped for lack of ring space and the bytes discarded on port close, reopen or link loss (HLR-BSP-027.7). Unprivileged tasks shall reach the ring only through `SVC_CDC_TX_WRITE` (93), which validates the caller buffer (HLR-KRN-074) | Must | ✅ Implemented |
+| HLR-BSP-027.3 | Queueing on the transmit ring shall never block, sleep or spin, and shall be callable from any task and from any configurable-priority interrupt or exception handler. NMI and HardFault handlers shall not write to the ring (the ring's PRIMASK lock does not mask them) | Must | ✅ Implemented |
+| HLR-BSP-027.4 | Checking that the endpoint is idle and starting a transfer shall be one step with respect to the USB interrupt and to other producers (interrupts masked). A transfer shall be at most `CDC_TX_MAX_CHUNK` bytes, and its bytes shall stay in the ring until the transfer-complete interrupt releases them | Must | ✅ Implemented |
+| HLR-BSP-027.5 | A USB reset or re-configuration shall clear the in-flight transfer state, so a transfer lost to the reset cannot wedge the ring. The lost transfer's bytes shall stay queued and be sent again, unless the port was open when the link was lost: the CDC de-initialisation then reports the port closed and the queued bytes are discarded as for a close (HLR-BSP-027.7) | Must | ✅ Implemented |
+| HLR-BSP-027.6 | While the device is not configured or the bus is suspended, output shall stay queued up to the ring capacity and shall be sent when the host opens the port (unless a reopen discards it, HLR-BSP-027.7), when the bus resumes, on the next write, or on the next transfer completion | Must | ✅ Implemented |
+| HLR-BSP-027.7 | On a change of the host's DTR line, output written while the port was closed shall not reach the next open: when DTR goes from set to clear (close, including link loss) and when it goes from clear to set after an earlier open since boot (reopen), the bytes queued behind the transfer in flight shall be discarded and counted as dropped (`__cdc_tx_dropped()`). The first clear-to-set since boot shall keep them, so output queued before the first open is sent. A report that does not change DTR shall discard nothing. A transfer already in flight shall never be discarded and shall complete normally, so up to `CDC_TX_MAX_CHUNK` (2048) bytes written before a close can still arrive after the reopen | Should | ✅ Implemented |
+| HLR-BSP-028 | The BSP shall retarget console output to the CDC transmit ring with partial-write semantics through a strong `_write()` (the C library's path for `printf`/`puts`/`fwrite(stdout)`), `stdio_write()` and the legacy single-character entry `__io_putchar`: bytes that fit are queued and the rest are dropped. `_write()` returns `len` and `__io_putchar()` returns its argument, so the C library never retries. `stdio_write()` returns the number of bytes queued, and the rest are dropped and counted (HLR-BSP-028.1) | Must | ✅ Implemented |
+| HLR-BSP-028.1 | Console bytes dropped because the transmit ring was full, or because an unprivileged caller passed a buffer it may not hand to the kernel, shall be counted since boot with an atomic update and shall be readable from unprivileged code (`stdio_get_tx_dropped()`) | Must | ✅ Implemented |
+| HLR-BSP-028.2 | The console retarget layer shall keep no buffer of its own: no line buffering, no flush on newline and no flush on buffer full; stdout buffering is left to the C library | Must | ✅ Implemented |
+| HLR-BSP-028.3 | Each `_write()` / `stdio_write()` call (up to 65535 bytes) shall be copied into the ring in one step with interrupts masked, so no other producer's bytes land inside it. `printf()` itself is not made thread-safe: the C library's shared stdout buffer is not locked, and callers that need whole lines from several tasks or handlers shall serialise their `printf()` calls or format into their own buffer and call `stdio_write()` | Must | ✅ Implemented |
+
+#### 3.2.5 System Control
+
+| ID | Requirement | Priority | Status |
+|----|-------------|----------|--------|
+| HLR-BSP-029 | The BSP shall provide `sys_enter_bootloader()` (SVC 90), which records a request in reset-surviving RAM and resets the chip; the startup code shall detect the request before `main()`, clock setup and the watchdog start, clear it, and jump to the ROM bootloader | Should | ✅ Implemented |
 
 ---
 
@@ -374,6 +422,15 @@ bool pipe_enqueue(uint8_t pipe_idx, uint8_t data);
 int16_t pipe_dequeue(uint8_t pipe_idx);
 uint8_t pipe_get_count(uint8_t pipe_idx);
 uint8_t pipe_get_max_count(uint8_t pipe_idx);
+
+// Backup SRAM (SVC 71, 86) — HLR-KRN-078
+bool bkpram_write(const void *src, uint32_t offset, uint32_t len);
+bool bkpram_read(void *dst, uint32_t offset, uint32_t len);
+
+// SVC caller-buffer policy — HLR-KRN-074, HLR-KRN-077
+bool svc_buffer_allowed(uintptr_t addr, uint32_t len, svc_access_t access,
+                        const svc_caller_t *caller);
+bool svc_caller_is_privileged(void);
 ```
 
 ### 5.2 AI Runtime API
@@ -417,6 +474,16 @@ void LED_Off(void);
 void LED_Blink(uint32_t on_ticks, uint32_t off_ticks);
 int32_t platform_write(void *handle, uint8_t reg, uint8_t *data, uint16_t len);
 int32_t platform_read(void *handle, uint8_t reg, uint8_t *data, uint16_t len);
+
+// USB CDC output (non-blocking) — HLR-BSP-027, HLR-BSP-028
+uint16_t cdc_tx_write(const uint8_t *data, uint16_t len, bool whole);
+bool CDC_Write(const uint8_t *data, uint16_t len);
+bool CDC_WriteString(const char *s);
+uint32_t stdio_write(const uint8_t *data, uint32_t len);
+uint32_t stdio_get_tx_dropped(void);
+
+// System control — HLR-BSP-029
+void sys_enter_bootloader(void);
 ```
 
 ---
@@ -454,19 +521,27 @@ See `ICARUS-VER-003 Test Traceability Matrix` for complete mapping.
 
 | Category | Total | Implemented | Planned |
 |----------|-------|-------------|---------|
-| Kernel (KRN) | 69 | 58 | 11 |
-| BSP | 18 | 14 | 4 |
+| Kernel (KRN) | 110 | 105 | 5 |
+| BSP | 30 | 26 | 4 |
 | AI Runtime | 24 | 0 | 24 |
-| Performance | 18 | 14 | 4 |
+| Performance | 20 | 14 | 6 |
 | Safety | 9 | 1 | 8 |
-| **Total** | **138** | **87** | **51** |
+| **Total** | **193** | **146** | **47** |
 
-> Counts include MPU/fault requirements HLR-KRN-060 through HLR-KRN-086,
-> shared service modules HLR-KRN-090 through HLR-KRN-094, Software Bus
-> (HLR-KRN-095), Background Checksum (HLR-KRN-096), task restart
-> (HLR-KRN-097), timed semaphore (HLR-KRN-098), task diagnostics
-> (HLR-KRN-099), BSP watchdog/button/CDC write (HLR-BSP-025 to
-> HLR-BSP-027), and the updated IPC scalability numbers (PRF-022/023).
+> Counting convention (v0.5): every table row in §3, §4 and §6 that
+> carries a requirement ID is one requirement, and each sub-requirement
+> (for example HLR-KRN-074.3) counts separately. "Implemented" counts
+> rows marked ✅ (Implemented or Met); "Planned" counts rows marked
+> Planned. PRF-010 is used by two rows (§4.1 and §4.2) and is counted
+> twice. The previous totals did not follow a stated convention and are
+> superseded.
+>
+> Counts include the v0.5.0 additions: SVC caller-buffer validation
+> (HLR-KRN-074 to HLR-KRN-074.8), SVC wrapper rules (HLR-KRN-075 to
+> HLR-KRN-077), backup SRAM (HLR-KRN-078), HLR-KRN-090.3,
+> HLR-KRN-092.3, HLR-KRN-094.4 to HLR-KRN-094.7, the USB CDC transmit
+> ring (HLR-BSP-027 to HLR-BSP-027.7), console retarget (HLR-BSP-028 to
+> HLR-BSP-028.3) and ROM bootloader entry (HLR-BSP-029).
 > Recount after adding or removing requirements.
 
 ---

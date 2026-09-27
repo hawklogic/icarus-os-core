@@ -58,6 +58,13 @@ typedef struct {
 
 /* ---- API --------------------------------------------------------------- */
 
+/*
+ * From an unprivileged task, every pointer below must be memory the task may
+ * pass to the kernel (see svc_buffer_allowed()); names are checked byte by
+ * byte up to FS_MAX_NAME_LEN.  Each function's note says what a rejected
+ * pointer does.
+ */
+
 /**
  * @brief  Clear all file table entries and zero the data store.
  * @note   Call once before any other fs_* function.
@@ -68,12 +75,14 @@ void fs_init(void);
  * @brief  Create a new file with the given name.
  * @return true on success; false if the filesystem is full, the name is
  *         already in use, or the name is invalid.
+ * @note   A rejected @p name or @p out returns false; no file is created.
  */
 bool fs_create(const char *name, fs_file_t *out);
 
 /**
  * @brief  Open an existing file by name.
  * @return true on success; false if the file does not exist.
+ * @note   A rejected @p name or @p out returns false; @p out is not written.
  */
 bool fs_open(const char *name, fs_file_t *out);
 
@@ -81,6 +90,7 @@ bool fs_open(const char *name, fs_file_t *out);
  * @brief  Append data to an open file.
  * @return true on success; false on invalid handle, null data, or if the
  *         write would exceed FS_MAX_FILE_SIZE.
+ * @note   A rejected @p f or @p data returns false; nothing is written.
  */
 bool fs_write(fs_file_t *f, const uint8_t *data, uint16_t len);
 
@@ -88,23 +98,27 @@ bool fs_write(fs_file_t *f, const uint8_t *data, uint16_t len);
  * @brief  Read bytes from an open file at a given offset.
  * @return Number of bytes actually read (may be less than len near EOF),
  *         or 0 on error.
+ * @note   A rejected @p f or @p buf returns 0; @p buf is not written.
  */
 uint16_t fs_read(fs_file_t *f, uint8_t *buf, uint16_t len, uint16_t offset);
 
 /**
  * @brief  Delete a file by name.
  * @return true on success; false if the file does not exist.
+ * @note   A rejected @p name returns false; nothing is deleted.
  */
 bool fs_delete(const char *name);
 
 /**
  * @brief  Enumerate all files currently in the filesystem.
  * @return Number of entries written into @p out.
+ * @note   A rejected @p out (checked for @p max entries) returns 0.
  */
 uint8_t fs_list(fs_file_info_t *out, uint8_t max);
 
 /**
  * @brief  Return aggregate filesystem statistics.
+ * @note   A rejected @p out is left unwritten (the call has no status).
  */
 void fs_stats(fs_stats_t *out);
 

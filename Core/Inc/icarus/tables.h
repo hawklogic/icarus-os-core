@@ -79,6 +79,13 @@ typedef struct {
 
 /* ---- API ---------------------------------------------------------------- */
 
+/*
+ * From an unprivileged task, every buffer below must be memory the task may
+ * pass to the kernel (see svc_buffer_allowed()).  A rejected buffer makes
+ * the call fail (false, or -1 for tbl_dump()) without touching the table or
+ * the buffer.
+ */
+
 /**
  * @brief  Initialise the table registry. Must be called before any other
  *         table function.
@@ -87,7 +94,8 @@ void     tbl_init(void);
 
 /**
  * @brief  Register a table descriptor.
- * @return true on success; false if registry is full or id is duplicate.
+ * @return true on success; false if registry is full or id is duplicate,
+ *         or @p desc was rejected.
  */
 bool     tbl_register(const tbl_descriptor_t *desc);
 
@@ -103,7 +111,8 @@ bool     tbl_register(const tbl_descriptor_t *desc);
  * reaches the descriptor size the data CRC is computed and staging is
  * marked valid.
  *
- * @return true on success; false on any rejection.
+ * @return true on success; false on any rejection, including a rejected
+ *         @p data buffer (staging is not touched).
  */
 bool     tbl_load_at(tbl_id_t id, uint16_t offset, const uint8_t *data,
                      uint16_t len, uint16_t schema_crc);
@@ -115,7 +124,8 @@ bool     tbl_load_at(tbl_id_t id, uint16_t offset, const uint8_t *data,
  * once a previous load completed.  Prefer tbl_load_at() for anything that
  * can retransmit.
  *
- * @return true on success; false on unknown id or out-of-bounds write.
+ * @return true on success; false on unknown id, out-of-bounds write, or a
+ *         rejected @p data buffer.
  */
 bool     tbl_load(tbl_id_t id, const uint8_t *data, uint16_t len,
                   uint16_t schema_crc);
@@ -143,7 +153,8 @@ bool     tbl_activate(tbl_id_t id);
 
 /**
  * @brief  Copy the *active* table bytes into @p out.
- * @return Number of bytes copied, or -1 on error (unknown id / no active).
+ * @return Number of bytes copied, or -1 on error (unknown id / no active,
+ *         or @p out rejected for @p max bytes).
  */
 int16_t  tbl_dump(tbl_id_t id, uint8_t *out, uint16_t max);
 
@@ -158,7 +169,8 @@ const tbl_descriptor_t *tbl_get_descriptor(tbl_id_t id);
 /**
  * @brief  Copy a table's descriptor fields and staging/active state out.
  * @param[out] out  Destination (caller memory).
- * @return true on success; false on unknown id or NULL @p out.
+ * @return true on success; false on unknown id, NULL @p out, or a rejected
+ *         @p out (left untouched).
  */
 bool     tbl_get_info(tbl_id_t id, tbl_info_t *out);
 

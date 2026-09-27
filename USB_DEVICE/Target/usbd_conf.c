@@ -26,7 +26,8 @@
 #include "usbd_cdc.h"
 
 /* USER CODE BEGIN Includes */
-
+/* USB CDC transmit ring: restarted when the bus resumes (see below). */
+#include "bsp/cdc.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -265,7 +266,17 @@ void HAL_PCD_ResumeCallback(PCD_HandleTypeDef *hpcd)
 #endif /* USE_HAL_PCD_REGISTER_CALLBACKS */
 {
   /* USER CODE BEGIN 3 */
-
+  /* The suspend callback stopped the PHY clock and nothing else restarts
+   * it on a host-initiated resume; restart it before any transfer.  Doing
+   * so when it is already running changes nothing. */
+  __HAL_PCD_UNGATE_PHYCLOCK(hpcd);
+  /* Output written while the bus was suspended stays queued in the CDC
+   * transmit ring (transfers fail while the device is SUSPENDED).  Restore
+   * the device state first, then restart the ring so those bytes go out
+   * without waiting for the next write.  USBD_LL_Resume() only acts while
+   * the state is SUSPENDED, so the generated call below is then a no-op. */
+  USBD_LL_Resume((USBD_HandleTypeDef*)hpcd->pData);
+  __cdc_tx_kick();
   /* USER CODE END 3 */
   USBD_LL_Resume((USBD_HandleTypeDef*)hpcd->pData);
 }

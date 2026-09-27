@@ -264,6 +264,146 @@ static void test_ring_foreign_busy_endpoint_leaves_data_queued(void) {
     ring_teardown();
 }
 
+static void test_ring_port_close_discards_queued_keeps_in_flight(void) {
+    ring_setup_manual();
+    TEST_ASSERT_TRUE(CDC_WriteString("abc"));  /* in flight */
+    TEST_ASSERT_TRUE(CDC_WriteString("de"));   /* queued behind it */
+    TEST_ASSERT_EQUAL_UINT16(3u, __cdc_host_inflight());
+
+    /* Host closes the port: only the queued "de" goes. */
+    TEST_ASSERT_EQUAL_UINT32(2u, __cdc_tx_discard_queued());
+    TEST_ASSERT_EQUAL_UINT32(3u, __cdc_tx_queued());
+    TEST_ASSERT_EQUAL_UINT16(3u, __cdc_host_inflight());
+    TEST_ASSERT_EQUAL_UINT32(2u, __cdc_tx_dropped());
+
+    /* The transfer in flight completes normally and nothing follows it. */
+    TEST_ASSERT_TRUE(__cdc_host_complete());
+    TEST_ASSERT_FALSE(__cdc_host_complete());
+    TEST_ASSERT_EQUAL_UINT32(0u, __cdc_tx_queued());
+    TEST_ASSERT_EQUAL_UINT32(1u, __cdc_host_chunk_count());
+
+    /* New output after the reopen goes out right behind it. */
+    TEST_ASSERT_TRUE(CDC_WriteString("xy"));
+    TEST_ASSERT_EQUAL_UINT32(1u, drain_all());
+    TEST_ASSERT_EQUAL_UINT16(5u, __cdc_host_sink_len());
+    TEST_ASSERT_EQUAL_MEMORY("abcxy", __cdc_host_sink(), 5u);
+    TEST_ASSERT_EQUAL_UINT32(2u, __cdc_tx_dropped());
+    ring_teardown();
+}
+
+static void test_ring_port_close_rewinds_wrapped_head(void) {
+    static uint8_t a[3000];
+    static uint8_t b[2000];
+    static uint8_t c[100];
+    ring_setup_manual();
+    (void)memset(a, 0x11, sizeof(a));
+    (void)memset(b, 0x22, sizeof(b));
+    (void)memset(c, 0x33, sizeof(c));
+
+    /* Leave the tail 3000 bytes in, then queue b: it wraps, so the transfer
+     * in flight runs exactly to the ring end and the head sits past index
+     * 0. */
+    TEST_ASSERT_TRUE(CDC_Write(a, sizeof(a)));
+    TEST_ASSERT_EQUAL_UINT32(2u, drain_all());
+    TEST_ASSERT_TRUE(CDC_Write(b, sizeof(b)));
+    TEST_ASSERT_TRUE(CDC_Write(c, sizeof(c)));
+    uint16_t inflight = __cdc_host_inflight();
+    TEST_ASSERT_EQUAL_UINT16(CDC_TX_RING_SIZE - sizeof(a), inflight);
+
+    TEST_ASSERT_EQUAL_UINT32(sizeof(b) + sizeof(c) - inflight,
+                             __cdc_tx_discard_queued());
+    TEST_ASSERT_EQUAL_UINT32(inflight, __cdc_tx_queued());
+
+    /* The head was rewound to the end of the in-flight run (index 0 after
+     * the wrap): the next write follows it with no stale bytes between. */
+    TEST_ASSERT_TRUE(__cdc_host_complete());
+    TEST_ASSERT_TRUE(CDC_WriteString("Z"));
+    TEST_ASSERT_EQUAL_UINT32(1u, drain_all());
+    uint16_t n = __cdc_host_sink_len();
+    TEST_ASSERT_EQUAL_UINT16(sizeof(a) + inflight + 1u, n);
+    TEST_ASSERT_EQUAL_MEMORY(b, &__cdc_host_sink()[sizeof(a)], inflight);
+    TEST_ASSERT_EQUAL_UINT8('Z', __cdc_host_sink()[n - 1u]);
+    TEST_ASSERT_EQUAL_UINT32(0u, __cdc_tx_queued());
+    ring_teardown();
+}
+
+static void test_ring_port_close_idle_and_empty(void) {
+    ring_setup_manual();
+    /* Nothing queued: nothing to drop. */
+    TEST_ASSERT_EQUAL_UINT32(0u, __cdc_tx_discard_queued());
+    TEST_ASSERT_EQUAL_UINT32(0u, __cdc_tx_dropped());
+
+    /* Nothing in flight (device not configured): every queued byte goes. */
+    __cdc_host_set_configured(false);
+    TEST_ASSERT_TRUE(CDC_WriteString("stale"));
+    TEST_ASSERT_EQUAL_UINT32(5u, __cdc_tx_discard_queued());
+    TEST_ASSERT_EQUAL_UINT32(0u, __cdc_tx_queued());
+    TEST_ASSERT_EQUAL_UINT32(5u, __cdc_tx_dropped());
+
+    __cdc_host_set_configured(true);
+    __cdc_tx_kick();
+    TEST_ASSERT_EQUAL_UINT32(0u, __cdc_host_chunk_count());
+    TEST_ASSERT_TRUE(CDC_WriteString("new"));
+    TEST_ASSERT_EQUAL_MEMORY("new", __cdc_host_sink(), 3u);
+    ring_teardown();
+}
+
+static void test_ring_reopen_drops_output_written_while_closed(void) {
+    ring_setup_manual();
+    (void)__cdc_tx_on_dtr(true);                   /* first open */
+    TEST_ASSERT_TRUE(CDC_WriteString("live1"));
+    TEST_ASSERT_TRUE(__cdc_host_complete());
+    TEST_ASSERT_TRUE(CDC_WriteString("live2"));    /* in flight at close */
+
+    /* The host closes the port and stops reading: the transfer stays in
+     * flight and later output queues behind it. */
+    TEST_ASSERT_EQUAL_UINT32(0u, __cdc_tx_on_dtr(false));
+    TEST_ASSERT_TRUE(CDC_WriteString("stale-A"));
+    TEST_ASSERT_TRUE(CDC_WriteString("stale-B"));
+
+    /* Reopen: what was written while closed goes; the in-flight "live2"
+     * cannot be recalled and still arrives. */
+    TEST_ASSERT_EQUAL_UINT32(14u, __cdc_tx_on_dtr(true));
+    TEST_ASSERT_EQUAL_UINT32(5u, __cdc_tx_queued());
+    TEST_ASSERT_TRUE(CDC_WriteString("new"));
+    (void)drain_all();
+    TEST_ASSERT_EQUAL_UINT16(13u, __cdc_host_sink_len());
+    TEST_ASSERT_EQUAL_MEMORY("live1live2new", __cdc_host_sink(), 13u);
+    TEST_ASSERT_EQUAL_UINT32(14u, __cdc_tx_dropped());
+
+    /* A report that does not change DTR drops nothing. */
+    TEST_ASSERT_TRUE(CDC_WriteString("x"));
+    TEST_ASSERT_EQUAL_UINT32(0u, __cdc_tx_on_dtr(true));
+    ring_teardown();
+}
+
+static void test_ring_first_open_keeps_output_from_before_it(void) {
+    ring_setup_manual();
+    __cdc_host_set_configured(false);
+    TEST_ASSERT_TRUE(CDC_WriteString("boot"));
+    __cdc_host_set_configured(true);
+
+    /* The first open since boot keeps the boot output. */
+    TEST_ASSERT_EQUAL_UINT32(0u, __cdc_tx_on_dtr(true));
+    __cdc_tx_kick();
+    TEST_ASSERT_EQUAL_UINT16(4u, __cdc_host_inflight());
+    TEST_ASSERT_EQUAL_MEMORY("boot", __cdc_host_sink(), 4u);
+
+    /* Link lost while open (reported as a close), then the port opens
+     * again: output written in between is dropped. */
+    TEST_ASSERT_TRUE(__cdc_host_complete());
+    __cdc_tx_on_link_reset();
+    (void)__cdc_tx_on_dtr(false);
+    __cdc_host_set_configured(false);
+    TEST_ASSERT_TRUE(CDC_WriteString("gone"));
+    __cdc_host_set_configured(true);
+    TEST_ASSERT_EQUAL_UINT32(4u, __cdc_tx_on_dtr(true));
+    __cdc_tx_kick();
+    TEST_ASSERT_EQUAL_UINT32(1u, __cdc_host_chunk_count());
+    TEST_ASSERT_EQUAL_UINT32(0u, __cdc_tx_queued());
+    ring_teardown();
+}
+
 static void test_ring_rejects_null_and_empty(void) {
     ring_setup_manual();
     TEST_ASSERT_EQUAL_UINT16(0u, cdc_tx_write(NULL, 4u, false));
@@ -290,5 +430,10 @@ void run_cdc_tests(void) {
     RUN_TEST(test_ring_kick_sends_output_queued_before_host_attached);
     RUN_TEST(test_ring_link_reset_clears_wedged_transfer);
     RUN_TEST(test_ring_foreign_busy_endpoint_leaves_data_queued);
+    RUN_TEST(test_ring_port_close_discards_queued_keeps_in_flight);
+    RUN_TEST(test_ring_port_close_rewinds_wrapped_head);
+    RUN_TEST(test_ring_port_close_idle_and_empty);
+    RUN_TEST(test_ring_reopen_drops_output_written_while_closed);
+    RUN_TEST(test_ring_first_open_keeps_output_from_before_it);
     RUN_TEST(test_ring_rejects_null_and_empty);
 }

@@ -72,9 +72,11 @@ The following memory protection features have been implemented and documented:
    - Enforced by ARM Cortex-M7 privilege levels
 
 5. **SVC call gates (HLR-KRN-067)**
-   - Kernel services are invoked from unprivileged code via SVC (57 SVC IDs, 0–56, see `svc.h`)
+   - Kernel services are invoked from unprivileged code via SVC (94 SVC IDs, 0–93, see `svc.h`)
    - IDs 29–39 cover atomic DTCM read/write helpers (`sem_can_*`, `pipe_can_*`, etc.)
    - IDs 40–56 are the v0.3.0 shared service module gates (cdc_rx, event, tables — see SDD §3.10)
+   - IDs 57–85 cover task restart (57), the timed semaphore (58), task diagnostics (59–62), checksum monitor, backup SRAM write, Software Bus and filesystem; IDs 86–93 are the v0.5.0 additions (SDD §4.2.5)
+   - Every caller buffer is checked against an allowlist before a privileged copy (HLR-KRN-074, SDD §4.2.8)
    - Controlled transition between privilege levels
 
 6. **Fault Handling (HLR-KRN-081, HLR-KRN-082, HLR-KRN-083)**
@@ -96,14 +98,40 @@ semaphore.c and pipe.c:
 
 | Module | SVC range | Backing storage | Tests |
 |---|---|---|---|
-| `icarus/cdc_rx.h` (USB CDC RX ring) | 40–42 | DTCM_PRIV | 7 |
-| `icarus/event.h` (event ring + squelch) | 43–48 | DTCM_PRIV | 9 |
-| `icarus/crc.h` (CRC16-CCITT, HW peripheral) | n/a | n/a (pure fn) | 8 |
+| `icarus/cdc_rx.h` (USB CDC RX ring) | 40–42 (+91 in v0.5.0) | DTCM_PRIV | 7 (+1 in `test_tables_load.c`) |
+| `icarus/event.h` (event ring + squelch) | 43–48 | DTCM_PRIV | 9 (12 as of v0.5.0) |
+| `icarus/crc.h` (CRC16-CCITT, HW peripheral) | n/a (89 for unprivileged callers since v0.5.0) | n/a (pure fn) | 8 (+1 in `test_tables_load.c`) |
 | `icarus/fs.h` (flat-file FS, 32 KB) | n/a | regular SRAM | 16 |
-| `icarus/tables.h` (ground-loadable tables) | 49–56 | DTCM_PRIV | 16 |
+| `icarus/tables.h` (loadable table engine) | 49–56 (+87, 88, 92 in v0.5.0) | DTCM_PRIV | 16 (+8 in `test_tables_load.c`) |
 
 See `design/SDD.md` §3.10 for the per-module design and
 `requirements/SRS.md` §3.1.8 for the requirement set.
+
+## Recent updates (v0.5.0 robustness release)
+
+Each change below is guarded by a host test or a static check; most
+were first seen failing on target hardware.
+
+| Area | Requirements | Design | Verified by |
+|---|---|---|---|
+| USB CDC transmit ring: all CDC output through one non-blocking ring; `CDC_Write` all-or-nothing; console output keeps what fits and counts drops. Replaces the busy-retry write and the putchar line buffers | HLR-BSP-027 to HLR-BSP-028.2 | SDD §3.11 | `test_cdc.c`, `test_stdio.c` |
+| SVC caller-buffer validation (allowlist per access) | HLR-KRN-074 | SDD §4.2.8 | `test_svc_policy.c`; `tools/check_svc_pointer_checks.py` |
+| SVC wrapper rules: `"memory"` clobber, host nested-SVC guard, handler-mode bypass | HLR-KRN-075 to HLR-KRN-077 | SDD §4.2.9 | `tools/check_svc_clobbers.py`; `test_svc_guard.c` |
+| Backup SRAM gates and non-cacheable MPU region 8 | HLR-KRN-078 | SDD §4.2.2, §4.2.3 | `test_bkpram.c` |
+| Checksum callbacks delivered in thread mode | HLR-KRN-096.2 | SDD §3.10.9 | `test_svc_guard.c` |
+| Tables: `tbl_load_at`, `tbl_abort`, `tbl_get_info`, commit gating; CRC via SVC; CDC RX drop counter | HLR-KRN-094.4 to 094.7, HLR-KRN-092.3, HLR-KRN-090.3 | SDD §3.10 | `test_tables_load.c` |
+| ROM bootloader entry (SVC 90) | HLR-BSP-029 | SDD §3.12 | Target integration test |
+
+On the transmit ring, port close and reopen are exercised on hardware
+(the device keeps working across a 30 s close and reopen), but the
+discarding of output written while the port was closed is host-tested
+only; the bus-resume path is host-tested only and not exercised on
+hardware (HLR-BSP-027.6, HLR-BSP-027.7).
+
+The putchar line-buffering entries BSP-030..032 in the test traceability
+matrix are retired (see `verification/test_traceability.md` §3.10). The
+host suite has 272 tests (`make -C tests`, which first runs both SVC
+static checks).
 
 ## Design Assurance Level (DAL)
 
@@ -120,3 +148,4 @@ Current documentation supports:
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 0.1 | 2025-01-26 | Souham Biswas | Initial documentation structure |
+| 0.2 | 2026-09-27 | Souham Biswas | v0.5.0: SVC ID range 0–93; robustness-release summary (CDC transmit ring, SVC caller-buffer validation, SVC wrapper rules, backup SRAM, bootloader entry) |

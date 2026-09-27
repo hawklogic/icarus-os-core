@@ -4,12 +4,16 @@
  *
  * @details See retarget_stdio.h.  This file keeps no buffer of its own:
  *          every byte is copied straight into the privileged USB CDC
- *          transmit ring by cdc_tx_write(), which is safe from any context
- *          (an SVC from tasks, a direct call from privileged code and
- *          handlers).  Partial writes are accepted, and whatever did not fit
- *          is added to a drop counter.  The counter lives in ordinary RAM so
- *          unprivileged code can read it, and is updated with an atomic add
- *          because tasks that print can preempt each other.
+ *          transmit ring by cdc_tx_write() (an SVC from tasks, a direct call
+ *          from privileged code and configurable-priority handlers; not
+ *          from NMI or HardFault).  Each call is one masked copy, so it is
+ *          atomic; newlib's shared stdout `FILE` buffer in front of
+ *          `_write()` is not locked, so concurrent `printf()` callers must
+ *          serialise themselves (see retarget_stdio.h).  Partial writes are
+ *          accepted, and whatever did not fit is added to a drop counter.
+ *          The counter lives in ordinary RAM so unprivileged code can read
+ *          it, and is updated with an atomic add because tasks that print
+ *          can preempt each other.
  *
  * @author  Souham Biswas
  * @date    2026
@@ -53,6 +57,8 @@ uint32_t stdio_write(const uint8_t *data, uint32_t len) {
     return done;
 }
 
+/* Legacy entry for direct callers only: newlib reaches the ring through the
+ * strong _write() below, never through this function. */
 int __io_putchar(int ch) {
     uint8_t byte = (uint8_t)ch;
     (void)stdio_write(&byte, 1u);

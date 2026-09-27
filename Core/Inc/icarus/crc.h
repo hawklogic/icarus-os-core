@@ -38,6 +38,9 @@ extern "C" {
  * @param  data Buffer to checksum (may be NULL only if @p len is 0).
  * @param  len  Number of bytes in @p data.
  * @return The 16-bit CRC value.
+ * @note   From an unprivileged task, a @p data buffer the task may not pass
+ *         to the kernel (see svc_buffer_allowed()) is not read and 0xFFFF
+ *         is returned, which is also the CRC of zero bytes.
  */
 uint16_t crc16_ccitt(const uint8_t *data, uint16_t len);
 

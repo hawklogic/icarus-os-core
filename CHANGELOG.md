@@ -5,8 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [0.5.0] - 2026-09-27
 
-Robustness release.  Every fix below was first seen failing on an
-STM32H750 board; each has a host test or a static check guarding it.
+Robustness release.  Most fixes below were first seen failing on an
+STM32H750 board.  Not every fix has a host test: the SVC caller-buffer
+policy and the USB CDC transmit ring are host-tested (the policy against
+the target memory map); the per-case pointer checks in the SVC dispatcher,
+which is target-only code, are guarded by a static check
+(`tools/check_svc_pointer_checks.py`), as is the SVC asm `"memory"` clobber
+(`tools/check_svc_clobbers.py`); the rest (USB callbacks, startup and
+linker placement, backup SRAM, MPU behaviour) is verified on hardware,
+with two gaps: the bus-resume path is host-tested only (the hardware run
+never suspends the bus), and closing and reopening the port is exercised
+on hardware (the board keeps working across a 30 s close) but the discard
+of the output written while closed is checked only on the host.
 
 ### Fixed
 
@@ -23,15 +33,35 @@ STM32H750 board; each has a host test or a static check guarding it.
   the port open without reading.  All CDC output (`printf` via a strong
   `_write()`, `__io_putchar`, `CDC_Write`) now goes through one 4 KB
   transmit ring in privileged DTCM (`bsp/cdc.h`, `CDC_TX_RING_SIZE`).
-  Producers copy in and return — nothing waits, spins or sleeps, from any
-  task or handler.  `CDC_Write` is all-or-nothing and returns false when
-  the ring is full; `printf` keeps what fits and counts the rest
-  (`stdio_get_tx_dropped()`).  The idle-check-and-start of a transfer runs
-  with interrupts masked, bytes stay in the ring until the
+  Producers copy in and return — nothing waits, spins or sleeps, from
+  tasks or configurable-priority handlers (not NMI or HardFault, which the
+  ring's PRIMASK lock does not mask).  `CDC_Write` is all-or-nothing and
+  returns false when the ring is full; `printf` keeps what fits and counts
+  the rest (`stdio_get_tx_dropped()`).  The idle-check-and-start of a
+  transfer runs with interrupts masked, bytes stay in the ring until the
   transfer-complete interrupt releases them, and a USB reset or
   re-configuration clears the in-flight state so a lost transfer cannot
   wedge the ring.  Output queued before a host attaches is sent when it
-  opens the port.
+  opens the port.  Each `_write()` / `stdio_write()` call is atomic, but
+  `printf` itself formats into newlib-nano's shared stdout `FILE` buffer,
+  which nothing locks (the `__retarget_lock_*` hooks are newlib's no-op
+  stubs in this build): concurrent `printf` from preemptive tasks can
+  still interleave or duplicate characters unless the callers serialise,
+  for example inside a critical section.
+- **Output queued while the USB bus was suspended waited for the next
+  write.**  Transfers fail while the device is suspended; the resume
+  callback now restarts the PHY clock that the suspend callback stops,
+  restores the device state and restarts the transmit ring.
+- **Reopening the port replayed old output as if it were live.**  A host
+  that closes the port stops reading, so bytes written while it was closed
+  went out on the next open, possibly minutes later.  On a DTR change the
+  ring now discards the bytes queued behind the transfer in flight, and
+  counts them as dropped: when the host closes the port, and again when it
+  reopens it after an earlier open (`__cdc_tx_on_dtr()`; a lost link counts
+  as a close).  Output queued before the first open since boot is kept and
+  sent when the port opens.  A transfer already in flight at the close
+  cannot be recalled, so up to `CDC_TX_MAX_CHUNK` bytes from before the
+  close can still arrive after the reopen.
 - **SVC handlers dereferenced caller pointers almost unchecked.**  The
   buffer check only rejected privileged DTCM and backup SRAM, so a task
   could make the kernel copy, with privilege, into another task's
@@ -44,7 +74,23 @@ STM32H750 board; each has a host test or a static check guarding it.
   half, or the caller's own data-pool slot; reads also from internal flash
   and ITCM.  Names are checked byte by byte up to their maximum length.
   A rejected pointer returns the call's failure value and touches no
-  memory.
+  memory.  `tools/check_svc_pointer_checks.py` now fails `make -C tests`
+  if a dispatch case uses a caller pointer without a preceding check.
+- **A task could aim an SVC copy at the handler's own return address.**
+  The RAM_D1 allowance covered the main stack at its top: MSP starts at
+  `_estack` and is never moved, so while an SVC runs the handler's frame
+  (saved LR / EXC_RETURN) sits just below it, and a task could
+  `bkpram_write` chosen bytes and `bkpram_read` them over that frame to
+  redirect the privileged return.  For a task caller (exception frame on
+  the process stack) any read or write range that overlaps the main-stack
+  window `[_estack - _Min_Stack_Size, _estack)` is now rejected.  Boot
+  code still running on the main stack may pass its own locals.  The
+  window covers the handler's frame only while the main stack stays within
+  `_Min_Stack_Size` (the never-unwound `main()`/`os_start()` frames plus
+  the handler and nested interrupts); an application whose `main()` keeps
+  large locals must raise it.  The
+  caller is an input of the pure policy (`svc_caller_t`), so the rule is
+  host-tested with the target constants.
 - **SVC inline asm had no `"memory"` clobber** (80 blocks, including
   `enter_critical`/`exit_critical`).  At -O2 `tbl_activate()` read its
   out-parameters before the handler's writes were visible, so every table
@@ -91,12 +137,28 @@ STM32H750 board; each has a host test or a static check guarding it.
   transmitted runs and fire USB transfer completion
   (`__cdc_host_set_configured`, `__cdc_host_set_auto_complete`,
   `__cdc_host_complete`, ...).
+- `__cdc_tx_on_dtr()`: port open/close hook that drops output written
+  while the port was closed; `__cdc_tx_discard_queued()` drops the queued
+  bytes that are not in flight.
+- `tools/check_svc_pointer_checks.py` (`make -C tests`, target
+  `check-svc-ptr`): for every `case SVC_...:` of the dispatcher, a caller
+  argument (or a local copied from one) that is cast to a pointer must be
+  checked first by `svc_user_*_ok()`, `svc_buffer_allowed()` or
+  `bkpram_range_ok()` on the same register.  Function pointers are
+  accepted only for the cases on an explicit allowlist (task entry,
+  checksum callback), and stale allowlist entries fail.  Prologue copies
+  of a caller register may be cast or comma-separated; any other prologue
+  read of one fails the check.
 
 ### Changed
 
 - The host test suite links and runs again (`cs.c`, `sb.c`,
   `bootloader.c` were missing and a failing run was masked by `|| true`):
-  263 tests.  CI runs it on every push.
+  272 tests, run after the two static SVC checks.  CI runs it on every
+  push.
+- `svc_buffer_allowed()` takes the caller as a `const svc_caller_t *`
+  (data-pool slot, main-stack window, whether the frame is on the process
+  stack) instead of the slot base and size.
 - `pipe_write_bytes()` / `pipe_read_bytes()` return `bool` (false when the
   pipe is invalid or the buffer is rejected) and `pipe_enqueue()` /
   `pipe_dequeue()` pass it on instead of always returning true.

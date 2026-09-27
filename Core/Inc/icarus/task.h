@@ -31,6 +31,11 @@ extern "C" {
  * @brief Register a task with automatic stack allocation
  * @param function Task entry point
  * @param name     Task name (max ICARUS_MAX_TASK_NAME_LEN chars)
+ * @note  From an unprivileged task, a @p name the task may not pass to the
+ *        kernel (checked byte by byte up to ICARUS_MAX_TASK_NAME_LEN; see
+ *        svc_buffer_allowed()) means no task is registered; there is no
+ *        error return.  @p function is stored unchecked: the new task runs
+ *        unprivileged.
  */
 void os_register_task(void (*function)(void), const char *name);
 

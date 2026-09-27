@@ -171,10 +171,33 @@ static bool svc_range_inside(uintptr_t addr, uint32_t len,
     return (off < (uintptr_t)size) && ((uintptr_t)len <= ((uintptr_t)size - off));
 }
 
+/**
+ * @brief  Whether [addr, addr + len) shares at least one byte with
+ *         [base, base + size).
+ * @details Computed from differences, so neither range end is formed and
+ *          nothing can overflow.
+ * @param[in] addr  Range start.
+ * @param[in] len   Range length.
+ * @param[in] base  Window start.
+ * @param[in] size  Window size.
+ * @retval true   The ranges overlap.
+ * @retval false  They are disjoint, or either one is empty.
+ */
+static bool svc_ranges_overlap(uintptr_t addr, uint32_t len,
+                               uintptr_t base, uint32_t size) {
+    if ((len == 0u) || (size == 0u)) {
+        return false;
+    }
+    if (addr >= base) {
+        return (addr - base) < (uintptr_t)size;
+    }
+    return (base - addr) < (uintptr_t)len;
+}
+
 /** @copydoc svc_buffer_allowed */
 bool svc_buffer_allowed(uintptr_t addr, uint32_t len, svc_access_t access,
-                        uintptr_t slot_base, uint32_t slot_size) {
-    if (addr == 0u) {
+                        const svc_caller_t *caller) {
+    if ((caller == NULL) || (addr == 0u)) {
         return false;
     }
     if (len == 0u) {
@@ -183,7 +206,12 @@ bool svc_buffer_allowed(uintptr_t addr, uint32_t len, svc_access_t access,
     if (addr > (UINTPTR_MAX - (uintptr_t)len)) {
         return false;                                   /* wraps */
     }
-    if (svc_range_inside(addr, len, slot_base, slot_size)) {
+    if (caller->from_task &&
+        svc_ranges_overlap(addr, len, caller->main_stack_base,
+                           caller->main_stack_size)) {
+        return false;           /* the running handler's own frame is here */
+    }
+    if (svc_range_inside(addr, len, caller->slot_base, caller->slot_size)) {
         return true;
     }
     for (uint32_t i = 0u; i < (uint32_t)(sizeof(svc_regions) / sizeof(svc_regions[0])); i++) {
@@ -209,12 +237,49 @@ bool svc_caller_is_privileged(void) {
 #endif
 }
 
+#ifndef HOST_TEST
+/* Linker-script symbols (declared as in sysmem.c): the main stack starts at
+ * _estack and grows down; _Min_Stack_Size is an absolute symbol whose
+ * address is the size reserved for it. */
+extern uint8_t  _estack;
+extern uint32_t _Min_Stack_Size;
+
+/**
+ * @brief  Exception frame of the SVC being handled, set on entry to
+ *         SVC_Handler_C().
+ * @note   Privileged DTCM: in RAM_D1 a task could rewrite it between calls.
+ *         SVCs do not nest, so one instance serves every call.
+ */
+DTCM_DATA_PRIV static const uint32_t *svc_frame;
+
+/**
+ * @brief  Describe the caller of the SVC being handled.
+ * @details A frame stacked on the process stack leaves PSP pointing exactly
+ *          at it, so a task caller always compares equal and cannot pass
+ *          itself off as main-stack code, wherever it moved its PSP.  A
+ *          main-stack caller would compare equal only if PSP held that very
+ *          address (nothing sets PSP before the scheduler starts); it is
+ *          then treated as a task, which only rejects more.
+ * @param[out] caller  Data-pool slot, main-stack window and frame stack.
+ */
+static void svc_current_caller(svc_caller_t *caller) {
+    uintptr_t top  = (uintptr_t)&_estack;
+    uint32_t  size = (uint32_t)(uintptr_t)&_Min_Stack_Size;
+
+    __kernel_current_data_slot(&caller->slot_base, &caller->slot_size);
+    caller->main_stack_base = top - (uintptr_t)size;
+    caller->main_stack_size = size;
+    caller->from_task = ((uintptr_t)svc_frame == (uintptr_t)__get_PSP());
+}
+#endif /* !HOST_TEST */
+
 /**
  * @brief  Validate a caller buffer before a privileged copy touches it.
- * @details On target the calling task's data-pool slot is looked up and
- *          svc_buffer_allowed() applies the allowlist.  Host addresses are
- *          not target addresses, so the host build only rejects NULL and
- *          wrap-around (the policy itself is unit-tested on the host).
+ * @details On target svc_buffer_allowed() applies the allowlist to the
+ *          caller described by svc_current_caller() (its data-pool slot,
+ *          and the main-stack window when it is a task).  Host addresses
+ *          are not target addresses, so the host build only rejects NULL
+ *          and wrap-around (the policy itself is unit-tested on the host).
  * @param[in] addr    Buffer start address.
  * @param[in] len     Buffer length (0 allowed).
  * @param[in] access  Read or write.
@@ -223,10 +288,9 @@ bool svc_caller_is_privileged(void) {
 static bool svc_user_buffer_ok(uintptr_t addr, uint32_t len,
                                svc_access_t access) {
 #ifndef HOST_TEST
-    uintptr_t slot_base = 0u;
-    uint32_t  slot_size = 0u;
-    __kernel_current_data_slot(&slot_base, &slot_size);
-    return svc_buffer_allowed(addr, len, access, slot_base, slot_size);
+    svc_caller_t caller;
+    svc_current_caller(&caller);
+    return svc_buffer_allowed(addr, len, access, &caller);
 #else
     (void)access;
     return (addr != 0u) && ((len == 0u) ||
@@ -259,15 +323,14 @@ static bool svc_user_opt_buffer_ok(uintptr_t addr, uint32_t len,
  * @retval true   Every byte the implementation can read is allowed.
  */
 static bool svc_user_string_ok(uintptr_t addr, uint32_t max_len) {
-    uintptr_t slot_base = 0u;
-    uint32_t  slot_size = 0u;
-    __kernel_current_data_slot(&slot_base, &slot_size);
+    svc_caller_t caller;
+    svc_current_caller(&caller);
     if (addr == 0u) {
         return false;
     }
     for (uint32_t i = 0u; i < max_len; i++) {
         uintptr_t p = addr + (uintptr_t)i;
-        if (!svc_buffer_allowed(p, 1u, SVC_ACCESS_READ, slot_base, slot_size)) {
+        if (!svc_buffer_allowed(p, 1u, SVC_ACCESS_READ, &caller)) {
             return false;
         }
         if (*(const volatile char *)p == '\0') {
@@ -294,11 +357,15 @@ static bool svc_user_string_ok(uintptr_t addr, uint32_t max_len) {
  *       checked first (svc_user_buffer_ok() / svc_user_string_ok(), with
  *       the access the implementation makes).  On a rejected pointer the
  *       call returns its documented failure value and touches no memory.
+ *       tools/check_svc_pointer_checks.py fails the host test run when a
+ *       case uses a caller pointer without such a check.
  */
 void SVC_Handler_C(uint32_t *stack_frame) {
     uint8_t svc_number = ((uint8_t *)(uintptr_t)stack_frame[6])[-2];
     uint32_t arg0 = stack_frame[0];
     uint32_t arg1 = stack_frame[1];
+
+    svc_frame = stack_frame;            /* for the caller-buffer checks */
 
     switch (svc_number) {
 

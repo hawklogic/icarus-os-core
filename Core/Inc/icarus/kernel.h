@@ -149,13 +149,17 @@ void* kernel_protected_data(uint16_t num_words);
  *          without an MPU grant.  The region is mapped non-cacheable, so
  *          the data is in the SRAM when the call returns and survives a
  *          system or watchdog reset (and power loss while VBAT is held).
- *          Under HOST_TEST the same checks apply and the data goes to a
- *          host buffer that survives simulated resets.
+ *          Under HOST_TEST the offset/length check is the same, but host
+ *          addresses are not target addresses, so the source buffer is only
+ *          checked for NULL and wrap-around; the data goes to a host buffer
+ *          that survives simulated resets.
  *
  * @param[in] src     Source buffer.  Must lie in memory the caller may pass
  *                    to the kernel for reading (see svc_buffer_allowed():
  *                    RAM_D1, the application DTCM half, the caller's own
- *                    data-pool slot, internal flash or ITCM).
+ *                    data-pool slot, internal flash or ITCM).  From a task
+ *                    it must not overlap the main stack at the top of
+ *                    RAM_D1.
  * @param[in] offset  Byte offset into backup SRAM (0 .. BSP_BKPSRAM_SIZE-1).
  * @param[in] len     Number of bytes to copy (must be > 0).
  *
@@ -170,12 +174,16 @@ bool bkpram_write(const void *src, uint32_t offset, uint32_t len);
  *
  * @param[out] dst     Destination buffer.  Must be writable by the caller
  *                     (RAM_D1, the application DTCM half or the caller's
- *                     own data-pool slot; see svc_buffer_allowed()).
+ *                     own data-pool slot; see svc_buffer_allowed()).  From
+ *                     a task it must not overlap the main stack at the top
+ *                     of RAM_D1; boot code on the main stack may read into
+ *                     its own locals.
  * @param[in]  offset  Byte offset into backup SRAM.
  * @param[in]  len     Number of bytes to copy (must be > 0).
  *
  * @retval true   Read completed successfully.
- * @retval false  Validation failed.
+ * @retval false  Validation failed (range outside backup SRAM, len == 0,
+ *                or a disallowed destination buffer); @p dst is untouched.
  */
 bool bkpram_read(void *dst, uint32_t offset, uint32_t len);
 

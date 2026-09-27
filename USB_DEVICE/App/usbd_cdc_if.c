@@ -35,7 +35,8 @@
  * (bsp/cdc.h): the callbacks below advance it on transfer completion and
  * reset its in-flight state when the interface is (re)initialised.  Only
  * the ring calls CDC_Transmit_FS(), always with interrupts masked, so its
- * TxState check-then-start cannot race.
+ * TxState check-then-start cannot race.  DTR changes go to the ring, which
+ * drops output written while the port was closed (__cdc_tx_on_dtr()).
  */
 #include "bsp/cdc.h"
 /* USER CODE END INCLUDE */
@@ -191,8 +192,11 @@ static int8_t CDC_DeInit_FS(void)
 {
   /* USER CODE BEGIN 4 */
   cdc_dtr_asserted = 0U;
-  /* USB reset or disconnect: the transfer in flight will never complete. */
+  /* USB reset or disconnect: the transfer in flight will never complete,
+   * and the host side of an open port is gone, so report it closed (drops
+   * what nobody will read, including the lost transfer's bytes). */
   __cdc_tx_on_link_reset();
+  (void)__cdc_tx_on_dtr(false);
   return (USBD_OK);
   /* USER CODE END 4 */
 }
@@ -260,7 +264,13 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
        * setup packet itself: wValue bit 0 = DTR, bit 1 = RTS. */
       if (pbuf != NULL) {
         const USBD_SetupReqTypedef *req = (const USBD_SetupReqTypedef *)(void *)pbuf;
-        cdc_dtr_asserted = ((req->wValue & 0x0001U) != 0U) ? 1U : 0U;
+        uint8_t dtr = ((req->wValue & 0x0001U) != 0U) ? 1U : 0U;
+        /* The ring drops output written while the port was closed, on the
+         * close and on every reopen after the first open (see
+         * __cdc_tx_on_dtr()); a transfer in flight at the close may still
+         * arrive after the reopen. */
+        (void)__cdc_tx_on_dtr(dtr != 0U);
+        cdc_dtr_asserted = dtr;
       }
       /* The device is configured by now: send output queued while no
        * host was attached. */

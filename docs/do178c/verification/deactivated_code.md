@@ -1,8 +1,8 @@
 # Deactivated Code Analysis
 
 **Document ID:** ICARUS-VER-002
-**Version:** 0.3
-**Date:** 2026-04-11
+**Version:** 0.4
+**Date:** 2026-09-27
 **Status:** Draft
 **Classification:** Public (Open Source)
 
@@ -206,37 +206,46 @@ static void os_idle_task(void) {
 
 ---
 
-#### 3.3.3 os_transmit_printf_task
+#### 3.3.3 os_transmit_printf_task (Removed)
 
-| Attribute | Value |
-|-----------|-------|
-| **File** | `Core/Src/icarus/task.c` |
-| **Function** | `os_transmit_printf_task(void)` |
-| **Lines** | ~25 |
-| **Category** | Target-Only Code |
-| **Purpose** | Asynchronous printf transmission over USB |
-
-**Justification:** This task dequeues characters from the print buffer and transmits via USB CDC. The `while(1)` loop is intentional. Individual functions (`dequeue_print_buffer`, `CDC_Transmit_FS`, `task_busy_wait`, `task_active_sleep`) are tested where possible.
-
-**Verification Method:** Target integration testing, component unit tests
+**Removed from the source.** The printf transmit task and its print
+buffer no longer exist; console output is copied straight into the USB
+CDC transmit ring (`Core/Src/bsp/cdc.c`, `Core/Src/bsp/retarget_stdio.c`)
+and sent from the USB transfer-complete interrupt, so no infinite-loop
+task is involved. The ring logic is host-tested (`test_cdc.c`,
+`test_stdio.c`); its target-only parts are listed in §3.5. The entry is
+kept so that section numbers stay stable.
 
 ---
 
 ### 3.4 Static Helper Functions
 
-#### 3.4.1 dequeue_print_buffer
+#### 3.4.1 dequeue_print_buffer (Removed)
 
-| Attribute | Value |
-|-----------|-------|
-| **File** | `Core/Src/icarus/task.c` |
-| **Function** | `dequeue_print_buffer(uint8_t *out_c)` |
-| **Lines** | ~12 |
-| **Category** | Indirectly Deactivated |
-| **Caller** | `os_transmit_printf_task` only |
+**Removed from the source** together with `os_transmit_printf_task`
+(§3.3.3). No replacement helper is deactivated.
 
-**Justification:** This static function is only called by `os_transmit_printf_task`, which cannot be tested. The complementary function `enqueue_print_buffer` is fully tested, providing confidence in the buffer implementation.
+---
 
-**Verification Method:** Code review, `enqueue_print_buffer` tests provide indirect verification
+### 3.5 Target-Only Branches (v0.5.0)
+
+These branches run on target in every configuration, so they are not
+deactivated code; they are compiled out under `HOST_TEST` (or replaced by
+a host stand-in) and are therefore absent from host coverage. Each has a
+host-tested counterpart or is verified by target integration test and
+review.
+
+| File | Target-only code | Host stand-in / counterpart | Verification |
+|------|------------------|-----------------------------|--------------|
+| `Core/Src/icarus/svc.c` | `SVC_Handler_C()` dispatch and its per-arm caller-buffer checks; `svc_user_string_ok()`; the target branch of `svc_user_buffer_ok()` (data-pool slot lookup + allowlist) | Host wrappers call the `__` implementations directly; host `svc_user_buffer_ok()` rejects only NULL and wrap-around. The allowlist policy `svc_buffer_allowed()` is pure and host-tested with the target memory map (`test_svc_policy.c`) | Target integration test, review, static checks (`tools/check_svc_clobbers.py`, `tools/check_svc_pointer_checks.py`) |
+| `Core/Src/icarus/svc.c` | `svc_caller_is_privileged()` reading IPSR and CONTROL | Always true on the host | Target integration test, review |
+| `Core/Src/icarus/svc.c` | `svc_current_caller()`: data-pool slot lookup, main-stack window from `_estack` / `_Min_Stack_Size`, task detection by comparing the SVC frame with PSP | `svc_buffer_allowed()` is host-tested with task and main-stack callers (`test_svc_policy.c`) | Target integration test, review (including the assumption that the main stack stays within `_Min_Stack_Size`, SDD §4.2.8) |
+| `USB_DEVICE/App/usbd_cdc_if.c`, `USB_DEVICE/Target/usbd_conf.c` | DTR reports in `CDC_Control_FS()` and link loss in `CDC_DeInit_FS()` calling `__cdc_tx_on_dtr()`; `HAL_PCD_ResumeCallback()` restarting the PHY clock, calling `USBD_LL_Resume()` and `__cdc_tx_kick()` | USB device-stack callbacks are not built on the host; the ring functions they call are host-tested (`test_cdc.c`) | Review. Close and reopen: exercised on hardware (the device keeps working across a 30 s close and reopen); discard behaviour host-tested only. Bus resume: host-tested only; not exercised on hardware |
+| `Core/Src/bsp/cdc.c` | `tx_lock()` / `tx_unlock()` PRIMASK save, mask and restore; the SVC 93 asm path of `cdc_tx_write()` | Same ring logic runs unmasked against the mocked `CDC_Transmit_FS` (`test_cdc.c`) | Target integration test, review |
+| `Core/Src/bsp/retarget_stdio.c` | Strong `_write()` override | `stdio_write()` and `__io_putchar()`, which `_write()` calls, are host-tested (`test_stdio.c`) | Target integration test, review |
+| `Core/Src/icarus/crc.c` | SVC 89 asm path of `crc16_ccitt()` for unprivileged callers | Host calls `__crc16_ccitt()` directly (`test_crc.c`, `test_tables_load.c`) | Target integration test |
+| `Core/Src/bsp/bootloader.c` | `bsp_bootloader_check()` ROM jump; `__sys_enter_bootloader()` D-cache clean and system reset | Host build records the request only | Target integration test, review |
+| `Core/Src/bsp/mpu.c` | Region 8 (backup SRAM, non-cacheable) | Host backup-SRAM store survives simulated resets (`test_bkpram.c`) | Target integration test (retention across a real reset), review |
 
 ---
 
@@ -249,7 +258,8 @@ static void os_idle_task(void) {
 | Fault Handlers | Low - only execute on faults | Watchdog timer resets system |
 | Context Switch | Medium - critical for scheduling | Target integration tests |
 | Infinite Loop Tasks | Low - non-safety-critical features | Component tests cover internals |
-| Static Helpers | Low - buffer management | Complementary function tested |
+| Static Helpers | None remaining (`dequeue_print_buffer` was removed from the source before v0.2.0; its entry is retired in v0.5.0) | — |
+| Target-Only Branches (v0.5.0) | Medium - privilege and buffer checks | Pure policy host-tested; static checks; target integration tests |
 
 ### 4.2 Conclusion
 
@@ -273,3 +283,4 @@ All identified deactivated code has been analyzed and justified. The deactivated
 | 0.1 | 2025-01-26 | Souham Biswas | Initial draft |
 | 0.2 | 2026-04-01 | Souham Biswas | Reviewed against v0.2.0 MPU additions; no new deactivated paths introduced (red-team attack tasks are exercised at runtime, not deactivated) |
 | 0.3 | 2026-04-11 | Souham Biswas | Reviewed against v0.3.0 shared service modules. The HW CRC peripheral path in `crc.c` is `#ifndef HOST_TEST` — it is *not* deactivated code; it is target-only and exercised by on-target smoke tests with the corresponding HOST_TEST fallback covered by host unit tests. The `cdc_rx_push` ISR-direct path in the public wrapper is also target-active and exercised by the USB CDC class driver on hardware. No newly deactivated branches in the v0.3.0 modules. |
+| 0.4 | 2026-09-27 | Souham Biswas | Reviewed against v0.5.0. `os_transmit_printf_task` and `dequeue_print_buffer` were removed from the source (§3.3.3, §3.4.1 kept as stubs for numbering); console output now uses the USB CDC transmit ring. Added §3.5 listing the target-only branches introduced in v0.5.0 (SVC dispatch and caller-buffer checks, caller classification, privilege detection, PRIMASK lock, `_write()`, CRC SVC path, DTR close/reopen discard and bus-resume hooks, bootloader jump, MPU region 8). No newly deactivated code. |
