@@ -129,16 +129,21 @@ COVERAGE_DIR = $(BUILD_DIR)/coverage
 COVERAGE_INFO = $(COVERAGE_DIR)/coverage.info
 COVERAGE_HTML = $(COVERAGE_OUTPUT_DIR)
 
-.PHONY: all test clean coverage coverage-html coverage-summary
+.PHONY: all test clean coverage coverage-html coverage-summary check-svc-asm
 
 # Default target
 all: test
 
 # Build test executable. A failing test must fail the build so CI and
 # release scripts cannot silently ship regressions.
-test: $(TEST_EXE)
+test: check-svc-asm $(TEST_EXE)
 	@echo "Running tests..."
 	@$(TEST_EXE)
+
+# The host build never executes the SVC inline asm, so a static check
+# guards what the tests cannot: every SVC asm block clobbers "memory".
+check-svc-asm:
+	@python3 ../tools/check_svc_clobbers.py
 
 # Link test executable
 $(TEST_EXE): $(UNITY_OBJ) $(APP_OBJS) $(TEST_OBJS) $(MOCK_OBJS) | $(BUILD_DIR) $(OBJ_DIR)

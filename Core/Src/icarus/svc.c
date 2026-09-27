@@ -665,7 +665,7 @@ void SVC_Handler_C(uint32_t *stack_frame) {
  */
 void enter_critical(void) {
 #ifndef HOST_TEST
-    __asm__ volatile ("svc %0\n" : : "I" (SVC_ENTER_CRITICAL));
+    __asm__ volatile ("svc %0\n" : : "I" (SVC_ENTER_CRITICAL) : "memory");
 #else
     SVC_HOST_GATE();
     __enter_critical();
@@ -677,7 +677,7 @@ void enter_critical(void) {
  */
 void exit_critical(void) {
 #ifndef HOST_TEST
-    __asm__ volatile ("svc %0\n" : : "I" (SVC_EXIT_CRITICAL));
+    __asm__ volatile ("svc %0\n" : : "I" (SVC_EXIT_CRITICAL) : "memory");
 #else
     SVC_HOST_GATE();
     __exit_critical();
@@ -700,7 +700,7 @@ void os_start(void) { __os_start(); }
  */
 void os_yield(void) {
 #ifndef HOST_TEST
-    __asm__ volatile ("svc %0\n" : : "I" (SVC_OS_YIELD));
+    __asm__ volatile ("svc %0\n" : : "I" (SVC_OS_YIELD) : "memory");
 #else
     SVC_HOST_GATE();
     __os_yield();
@@ -719,7 +719,7 @@ uint32_t task_active_sleep(uint32_t ticks) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" (ticks), "I" (SVC_TASK_ACTIVE_SLEEP)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -753,7 +753,7 @@ uint32_t os_get_tick_count(void) {
         "mov %0, r0\n"
         : "=r" (result)
         : "I" (SVC_OS_GET_TICK_COUNT)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -773,7 +773,7 @@ const char *os_get_current_task_name(void) {
         "mov %0, r0\n"
         : "=r" (result)
         : "I" (SVC_OS_GET_CURRENT_TASK_NAME)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -793,7 +793,7 @@ uint8_t os_get_running_task_count(void) {
         "mov %0, r0\n"
         : "=r" (result)
         : "I" (SVC_OS_GET_RUNNING_TASK_COUNT)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -813,7 +813,7 @@ uint32_t os_get_task_ticks_remaining(void) {
         "mov %0, r0\n"
         : "=r" (result)
         : "I" (SVC_OS_GET_TASK_TICKS_REMAINING)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -831,7 +831,7 @@ uint32_t os_get_task_ticks_remaining(void) {
  */
 void os_exit_task(void) {
 #ifndef HOST_TEST
-    __asm__ volatile ("svc %0\n" : : "I" (SVC_OS_EXIT_TASK));
+    __asm__ volatile ("svc %0\n" : : "I" (SVC_OS_EXIT_TASK) : "memory");
 #else
     SVC_HOST_GATE();
     __os_exit_task();
@@ -843,7 +843,7 @@ void os_exit_task(void) {
  */
 void os_task_suicide(void) {
 #ifndef HOST_TEST
-    __asm__ volatile ("svc %0\n" : : "I" (SVC_OS_TASK_SUICIDE));
+    __asm__ volatile ("svc %0\n" : : "I" (SVC_OS_TASK_SUICIDE) : "memory");
 #else
     SVC_HOST_GATE();
     __os_task_suicide();
@@ -861,7 +861,7 @@ void os_register_task(void (*function)(void), const char *name) {
         "svc %2\n"
         :
         : "r" (function), "r" (name), "I" (SVC_OS_REGISTER_TASK)
-        : "r0", "r1"
+        : "r0", "r1", "memory"
     );
 #else
     SVC_HOST_GATE();
@@ -879,7 +879,7 @@ void os_kill_process(uint8_t task_index) {
         "svc %1\n"
         :
         : "r" ((uint32_t)task_index), "I" (SVC_OS_KILL_PROCESS)
-        : "r0"
+        : "r0", "memory"
     );
 #else
     SVC_HOST_GATE();
@@ -897,7 +897,7 @@ void os_restart_task(uint8_t task_index) {
         "svc %1\n"
         :
         : "r" ((uint32_t)task_index), "I" (SVC_OS_RESTART_TASK)
-        : "r0"
+        : "r0", "memory"
     );
 #else
     SVC_HOST_GATE();
@@ -921,7 +921,7 @@ uint32_t *kernel_get_stack(uint8_t task_idx) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)task_idx), "I" (SVC_KERNEL_GET_STACK)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -942,7 +942,7 @@ uint32_t *kernel_get_data(uint8_t task_idx) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)task_idx), "I" (SVC_KERNEL_GET_DATA)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -963,7 +963,7 @@ void *kernel_protected_data(uint16_t num_words) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)num_words), "I" (SVC_KERNEL_PROTECTED_DATA)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -990,7 +990,7 @@ bool semaphore_init(uint8_t semaphore_idx, uint32_t semaphore_count) {
         : "=r" (result)
         : "r" ((uint32_t)semaphore_idx), "r" (semaphore_count),
           "I" (SVC_SEMAPHORE_INIT)
-        : "r0", "r1"
+        : "r0", "r1", "memory"
     );
     return (bool)result;
 #else
@@ -1032,7 +1032,7 @@ uint32_t semaphore_get_count(uint8_t semaphore_idx) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)semaphore_idx), "I" (SVC_SEMAPHORE_GET_COUNT)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -1053,7 +1053,7 @@ uint32_t semaphore_get_max_count(uint8_t semaphore_idx) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)semaphore_idx), "I" (SVC_SEMAPHORE_GET_MAX_COUNT)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -1080,7 +1080,7 @@ bool pipe_init(uint8_t pipe_idx, uint16_t pipe_capacity_bytes) {
         : "=r" (result)
         : "r" ((uint32_t)pipe_idx), "r" ((uint32_t)pipe_capacity_bytes),
           "I" (SVC_PIPE_INIT)
-        : "r0", "r1"
+        : "r0", "r1", "memory"
     );
     return (bool)result;
 #else
@@ -1115,7 +1115,7 @@ uint16_t pipe_get_count(uint8_t pipe_idx) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)pipe_idx), "I" (SVC_PIPE_GET_COUNT)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -1136,7 +1136,7 @@ uint16_t pipe_get_max_count(uint8_t pipe_idx) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)pipe_idx), "I" (SVC_PIPE_GET_MAX_COUNT)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -1162,7 +1162,7 @@ bool sem_can_feed(uint8_t semaphore_idx) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)semaphore_idx), "I" (SVC_SEM_CAN_FEED)
-        : "r0"
+        : "r0", "memory"
     );
     return (bool)result;
 #else
@@ -1184,7 +1184,7 @@ bool sem_can_consume(uint8_t semaphore_idx) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)semaphore_idx), "I" (SVC_SEM_CAN_CONSUME)
-        : "r0"
+        : "r0", "memory"
     );
     return (bool)result;
 #else
@@ -1208,7 +1208,7 @@ bool pipe_can_enqueue(uint8_t pipe_idx, uint8_t message_bytes) {
         : "=r" (result)
         : "r" ((uint32_t)pipe_idx), "r" ((uint32_t)message_bytes),
           "I" (SVC_PIPE_CAN_ENQUEUE)
-        : "r0", "r1"
+        : "r0", "r1", "memory"
     );
     return (bool)result;
 #else
@@ -1232,7 +1232,7 @@ bool pipe_can_dequeue(uint8_t pipe_idx, uint8_t message_bytes) {
         : "=r" (result)
         : "r" ((uint32_t)pipe_idx), "r" ((uint32_t)message_bytes),
           "I" (SVC_PIPE_CAN_DEQUEUE)
-        : "r0", "r1"
+        : "r0", "r1", "memory"
     );
     return (bool)result;
 #else
@@ -1256,7 +1256,7 @@ void sem_increment(uint8_t semaphore_idx) {
         "svc %1\n"
         :
         : "r" ((uint32_t)semaphore_idx), "I" (SVC_SEM_INCREMENT)
-        : "r0"
+        : "r0", "memory"
     );
 #else
     SVC_HOST_GATE();
@@ -1275,7 +1275,7 @@ void sem_decrement(uint8_t semaphore_idx) {
         "svc %1\n"
         :
         : "r" ((uint32_t)semaphore_idx), "I" (SVC_SEM_DECREMENT)
-        : "r0"
+        : "r0", "memory"
     );
 #else
     SVC_HOST_GATE();
@@ -1297,7 +1297,7 @@ void pipe_write_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes)
         :
         : "r" ((uint32_t)pipe_idx), "r" (message), "r" ((uint32_t)message_bytes),
           "I" (SVC_PIPE_WRITE_BYTES)
-        : "r0", "r1", "r2"
+        : "r0", "r1", "r2", "memory"
     );
 #else
     SVC_HOST_GATE();
@@ -1319,7 +1319,7 @@ void pipe_read_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes) 
         :
         : "r" ((uint32_t)pipe_idx), "r" (message), "r" ((uint32_t)message_bytes),
           "I" (SVC_PIPE_READ_BYTES)
-        : "r0", "r1", "r2"
+        : "r0", "r1", "r2", "memory"
     );
 #else
     SVC_HOST_GATE();
@@ -1347,7 +1347,7 @@ const char *os_get_task_name(uint8_t task_idx) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)task_idx), "I" (SVC_GET_TASK_NAME)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -1369,7 +1369,7 @@ uint8_t os_get_num_created_tasks(void) {
         "mov %0, r0\n"
         : "=r" (result)
         : "I" (SVC_GET_NUM_TASKS)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -1391,7 +1391,7 @@ uint8_t os_is_running(void) {
         "mov %0, r0\n"
         : "=r" (result)
         : "I" (SVC_OS_IS_RUNNING)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -1412,7 +1412,7 @@ icarus_task_state_t os_get_task_state(uint8_t task_idx) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)task_idx), "I" (SVC_GET_TASK_STATE)
-        : "r0"
+        : "r0", "memory"
     );
     return (icarus_task_state_t)result;
 #else
@@ -1433,7 +1433,7 @@ uint32_t os_get_task_dispatch_count(uint8_t task_idx) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)task_idx), "I" (SVC_GET_TASK_DISPATCH_COUNT)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -1454,7 +1454,7 @@ uint32_t os_get_stack_watermark(uint8_t task_idx) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)task_idx), "I" (SVC_GET_STACK_WATERMARK)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -1473,7 +1473,7 @@ void os_update_stack_watermark(uint8_t task_idx) {
         "svc %1\n"
         :
         : "r" ((uint32_t)task_idx), "I" (SVC_UPDATE_STACK_WATERMARK)
-        : "r0"
+        : "r0", "memory"
     );
 #else
     SVC_HOST_GATE();
@@ -1488,7 +1488,7 @@ void os_update_stack_watermark(uint8_t task_idx) {
 /* Init: void → void. */
 void cdc_rx_init(void) {
 #ifndef HOST_TEST
-    __asm__ volatile ("svc %0\n" : : "I" (SVC_CDC_RX_INIT));
+    __asm__ volatile ("svc %0\n" : : "I" (SVC_CDC_RX_INIT) : "memory");
 #else
     SVC_HOST_GATE();
     __cdc_rx_init();
@@ -1511,7 +1511,7 @@ bool cdc_rx_read_byte(uint8_t *out) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)(uintptr_t)out), "I" (SVC_CDC_RX_READ_BYTE)
-        : "r0"
+        : "r0", "memory"
     );
     return (bool)result;
 #else
@@ -1528,7 +1528,7 @@ uint32_t cdc_rx_available(void) {
         "mov %0, r0\n"
         : "=r" (result)
         : "I" (SVC_CDC_RX_AVAILABLE)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -1543,7 +1543,7 @@ uint32_t cdc_rx_available(void) {
 
 void event_init(void) {
 #ifndef HOST_TEST
-    __asm__ volatile ("svc %0\n" : : "I" (SVC_EVENT_INIT));
+    __asm__ volatile ("svc %0\n" : : "I" (SVC_EVENT_INIT) : "memory");
 #else
     SVC_HOST_GATE();
     __event_init();
@@ -1571,7 +1571,7 @@ void os_event(uint8_t module_id, event_severity_t severity, uint16_t event_id,
         :
         : "r" (packed), "r" ((uint32_t)(uintptr_t)payload),
           "r" ((uint32_t)payload_len), "I" (SVC_OS_EVENT)
-        : "r0", "r1", "r2"
+        : "r0", "r1", "r2", "memory"
     );
 #else
     SVC_HOST_GATE();
@@ -1588,7 +1588,7 @@ void event_set_squelch(uint8_t module_id, event_severity_t min_severity) {
         :
         : "r" ((uint32_t)module_id), "r" ((uint32_t)min_severity),
           "I" (SVC_EVENT_SET_SQUELCH)
-        : "r0", "r1"
+        : "r0", "r1", "memory"
     );
 #else
     SVC_HOST_GATE();
@@ -1605,7 +1605,7 @@ event_severity_t event_get_squelch(uint8_t module_id) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)module_id), "I" (SVC_EVENT_GET_SQUELCH)
-        : "r0"
+        : "r0", "memory"
     );
     return (event_severity_t)result;
 #else
@@ -1629,7 +1629,7 @@ bool event_drain(event_entry_t *out_buf, uint8_t max_entries,
           "r" ((uint32_t)max_entries),
           "r" ((uint32_t)(uintptr_t)num_drained),
           "I" (SVC_EVENT_DRAIN)
-        : "r0", "r1", "r2"
+        : "r0", "r1", "r2", "memory"
     );
     return (bool)result;
 #else
@@ -1646,7 +1646,7 @@ uint32_t event_get_count(void) {
         "mov %0, r0\n"
         : "=r" (result)
         : "I" (SVC_EVENT_GET_COUNT)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -1661,7 +1661,7 @@ uint32_t event_get_count(void) {
 
 void tbl_init(void) {
 #ifndef HOST_TEST
-    __asm__ volatile ("svc %0\n" : : "I" (SVC_TBL_INIT));
+    __asm__ volatile ("svc %0\n" : : "I" (SVC_TBL_INIT) : "memory");
 #else
     SVC_HOST_GATE();
     __tbl_init();
@@ -1677,7 +1677,7 @@ bool tbl_register(const tbl_descriptor_t *desc) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)(uintptr_t)desc), "I" (SVC_TBL_REGISTER)
-        : "r0"
+        : "r0", "memory"
     );
     return (bool)result;
 #else
@@ -1701,7 +1701,7 @@ bool tbl_load(tbl_id_t id, const uint8_t *data, uint16_t len,
         : "r" ((uint32_t)id), "r" ((uint32_t)(uintptr_t)data),
           "r" ((uint32_t)len), "r" ((uint32_t)schema_crc),
           "I" (SVC_TBL_LOAD)
-        : "r0", "r1", "r2", "r3"
+        : "r0", "r1", "r2", "r3", "memory"
     );
     return (bool)result;
 #else
@@ -1737,7 +1737,7 @@ bool tbl_activate(tbl_id_t id) {
               "r" ((uint32_t)(uintptr_t)&scratch_len),
               "r" ((uint32_t)(uintptr_t)&activate_cb),
               "I" (SVC_TBL_ACTIVATE_PREPARE)
-            : "r0", "r1", "r2", "r3"
+            : "r0", "r1", "r2", "r3", "memory"
         );
         ok = (bool)result;
     }
@@ -1774,7 +1774,7 @@ bool tbl_activate(tbl_id_t id) {
               "r" ((uint32_t)(uintptr_t)scratch),
               "r" ((uint32_t)scratch_len),
               "I" (SVC_TBL_ACTIVATE_COMMIT)
-            : "r0", "r1", "r2"
+            : "r0", "r1", "r2", "memory"
         );
         return (bool)result;
     }
@@ -1798,7 +1798,7 @@ int16_t tbl_dump(tbl_id_t id, uint8_t *out, uint16_t max) {
         : "=r" (result)
         : "r" ((uint32_t)id), "r" ((uint32_t)(uintptr_t)out),
           "r" ((uint32_t)max), "I" (SVC_TBL_DUMP)
-        : "r0", "r1", "r2"
+        : "r0", "r1", "r2", "memory"
     );
     return (int16_t)result;
 #else
@@ -1816,7 +1816,7 @@ const tbl_descriptor_t *tbl_get_descriptor(tbl_id_t id) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)id), "I" (SVC_TBL_GET_DESCRIPTOR)
-        : "r0"
+        : "r0", "memory"
     );
     return (const tbl_descriptor_t *)(uintptr_t)result;
 #else
@@ -1833,7 +1833,7 @@ uint8_t tbl_count(void) {
         "mov %0, r0\n"
         : "=r" (result)
         : "I" (SVC_TBL_COUNT)
-        : "r0"
+        : "r0", "memory"
     );
     return (uint8_t)result;
 #else
@@ -1858,7 +1858,7 @@ bool tbl_load_at(tbl_id_t id, uint16_t offset, const uint8_t *data,
         : "r" (packed), "r" ((uint32_t)(uintptr_t)data),
           "r" ((uint32_t)len), "r" ((uint32_t)schema_crc),
           "I" (SVC_TBL_LOAD_AT)
-        : "r0", "r1", "r2", "r3"
+        : "r0", "r1", "r2", "r3", "memory"
     );
     return (bool)result;
 #else
@@ -1879,7 +1879,7 @@ bool tbl_abort(tbl_id_t id) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)id), "I" (SVC_TBL_ABORT)
-        : "r0"
+        : "r0", "memory"
     );
     return (bool)result;
 #else
@@ -1916,7 +1916,7 @@ uint32_t cdc_rx_dropped(void) {
         "mov %0, r0\n"
         : "=r" (result)
         : "I" (SVC_CDC_RX_DROPPED)
-        : "r0"
+        : "r0", "memory"
     );
     return result;
 #else
@@ -1931,7 +1931,7 @@ uint32_t cdc_rx_dropped(void) {
 
 void cs_init(void) {
 #ifndef HOST_TEST
-    __asm__ volatile ("svc %0\n" : : "I" (SVC_CS_INIT));
+    __asm__ volatile ("svc %0\n" : : "I" (SVC_CS_INIT) : "memory");
 #else
     SVC_HOST_GATE();
     __cs_init();
@@ -1945,7 +1945,7 @@ void cs_set_callback(cs_mismatch_fn fn) {
         "svc %1\n"
         :
         : "r" ((uint32_t)(uintptr_t)fn), "I" (SVC_CS_SET_CALLBACK)
-        : "r0"
+        : "r0", "memory"
     );
 #else
     SVC_HOST_GATE();
@@ -1965,7 +1965,7 @@ bool cs_add_region(uint8_t idx, const uint8_t *addr, uint32_t size) {
         : "=r" (result)
         : "r" ((uint32_t)idx), "r" ((uint32_t)(uintptr_t)addr),
           "r" (size), "I" (SVC_CS_ADD_REGION)
-        : "r0", "r1", "r2"
+        : "r0", "r1", "r2", "memory"
     );
     return (bool)result;
 #else
@@ -1985,7 +1985,7 @@ bool cs_enable(uint8_t idx, bool enabled) {
         : "=r" (result)
         : "r" ((uint32_t)idx), "r" ((uint32_t)enabled),
           "I" (SVC_CS_ENABLE)
-        : "r0", "r1"
+        : "r0", "r1", "memory"
     );
     return (bool)result;
 #else
@@ -2003,7 +2003,7 @@ bool cs_rebaseline(uint8_t idx) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)idx), "I" (SVC_CS_REBASELINE)
-        : "r0"
+        : "r0", "memory"
     );
     return (bool)result;
 #else
@@ -2069,7 +2069,7 @@ bool cs_get_region(uint8_t idx, cs_region_t *out) {
         : "=r" (result)
         : "r" ((uint32_t)idx), "r" ((uint32_t)(uintptr_t)out),
           "I" (SVC_CS_GET_REGION)
-        : "r0", "r1"
+        : "r0", "r1", "memory"
     );
     return (bool)result;
 #else
@@ -2086,7 +2086,7 @@ uint8_t cs_region_count(void) {
         "mov %0, r0\n"
         : "=r" (result)
         : "I" (SVC_CS_REGION_COUNT)
-        : "r0"
+        : "r0", "memory"
     );
     return (uint8_t)result;
 #else
@@ -2112,7 +2112,7 @@ bool bkpram_write(const void *src, uint32_t offset, uint32_t len) {
         : "=r" (result)
         : "r" ((uint32_t)(uintptr_t)src), "r" (offset),
           "r" (len), "I" (SVC_BKPRAM_WRITE)
-        : "r0", "r1", "r2"
+        : "r0", "r1", "r2", "memory"
     );
     return (bool)result;
 #else

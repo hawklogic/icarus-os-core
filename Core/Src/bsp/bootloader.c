@@ -60,7 +60,7 @@ void __sys_enter_bootloader(void) {
 }
 
 void sys_enter_bootloader(void) {
-    __asm__ volatile ("svc %0\n" : : "I" (SVC_SYS_ENTER_BOOTLOADER));
+    __asm__ volatile ("svc %0\n" : : "I" (SVC_SYS_ENTER_BOOTLOADER) : "memory");
     for (;;) {
     }
 }

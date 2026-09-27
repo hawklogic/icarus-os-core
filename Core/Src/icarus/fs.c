@@ -276,7 +276,7 @@ ITCM_FUNC void __fs_stats(fs_stats_t *out) {
  */
 void fs_init(void) {
 #ifndef HOST_TEST
-    __asm__ volatile ("svc %0\n" : : "I" (SVC_FS_INIT));
+    __asm__ volatile ("svc %0\n" : : "I" (SVC_FS_INIT) : "memory");
 #else
     SVC_HOST_GATE();
     __fs_init();
@@ -301,7 +301,7 @@ bool fs_create(const char *name, fs_file_t *out) {
         : "=r" (result)
         : "r" ((uint32_t)(uintptr_t)name), "r" ((uint32_t)(uintptr_t)out),
           "I" (SVC_FS_CREATE)
-        : "r0", "r1"
+        : "r0", "r1", "memory"
     );
     return (bool)result;
 #else
@@ -328,7 +328,7 @@ bool fs_open(const char *name, fs_file_t *out) {
         : "=r" (result)
         : "r" ((uint32_t)(uintptr_t)name), "r" ((uint32_t)(uintptr_t)out),
           "I" (SVC_FS_OPEN)
-        : "r0", "r1"
+        : "r0", "r1", "memory"
     );
     return (bool)result;
 #else
@@ -357,7 +357,7 @@ bool fs_write(fs_file_t *f, const uint8_t *data, uint16_t len) {
         : "=r" (result)
         : "r" ((uint32_t)(uintptr_t)f), "r" ((uint32_t)(uintptr_t)data),
           "r" ((uint32_t)len), "I" (SVC_FS_WRITE)
-        : "r0", "r1", "r2"
+        : "r0", "r1", "r2", "memory"
     );
     return (bool)result;
 #else
@@ -388,7 +388,7 @@ uint16_t fs_read(fs_file_t *f, uint8_t *buf, uint16_t len, uint16_t offset) {
         : "r" ((uint32_t)(uintptr_t)f), "r" ((uint32_t)(uintptr_t)buf),
           "r" ((uint32_t)len), "r" ((uint32_t)offset),
           "I" (SVC_FS_READ)
-        : "r0", "r1", "r2", "r3"
+        : "r0", "r1", "r2", "r3", "memory"
     );
     return (uint16_t)result;
 #else
@@ -412,7 +412,7 @@ bool fs_delete(const char *name) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)(uintptr_t)name), "I" (SVC_FS_DELETE)
-        : "r0"
+        : "r0", "memory"
     );
     return (bool)result;
 #else
@@ -438,7 +438,7 @@ uint8_t fs_list(fs_file_info_t *out, uint8_t max) {
         : "=r" (result)
         : "r" ((uint32_t)(uintptr_t)out), "r" ((uint32_t)max),
           "I" (SVC_FS_LIST)
-        : "r0", "r1"
+        : "r0", "r1", "memory"
     );
     return (uint8_t)result;
 #else
@@ -458,7 +458,7 @@ void fs_stats(fs_stats_t *out) {
         "svc %1\n"
         :
         : "r" ((uint32_t)(uintptr_t)out), "I" (SVC_FS_STATS)
-        : "r0"
+        : "r0", "memory"
     );
 #else
     SVC_HOST_GATE();
