@@ -12,7 +12,9 @@
  *          is used so unit tests run unchanged off-target.
  *
  *          Thread-safe: each call wraps a critical section because the
- *          CRC peripheral has internal state.
+ *          CRC peripheral has internal state.  Callable from unprivileged
+ *          tasks (routed through an SVC gate) and from privileged code or
+ *          exception handlers (direct).
  *
  * @author  Souham Biswas
  * @date    2026
@@ -36,8 +38,17 @@ extern "C" {
  * @param  data Buffer to checksum (may be NULL only if @p len is 0).
  * @param  len  Number of bytes in @p data.
  * @return The 16-bit CRC value.
+ * @note   From an unprivileged task, a @p data buffer the task may not pass
+ *         to the kernel (see svc_buffer_allowed()) is not read and 0xFFFF
+ *         is returned, which is also the CRC of zero bytes.
  */
 uint16_t crc16_ccitt(const uint8_t *data, uint16_t len);
+
+/**
+ * @brief  Privileged implementation (drives the CRC engine directly).
+ * @note   Internal — use crc16_ccitt().
+ */
+uint16_t __crc16_ccitt(const uint8_t *data, uint16_t len);
 
 #ifdef __cplusplus
 }

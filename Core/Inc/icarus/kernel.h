@@ -138,25 +138,65 @@ uint32_t* kernel_get_data(uint8_t task_idx);
 void* kernel_protected_data(uint16_t num_words);
 
 /* ============================================================================
- * BKPRAM WRITE GATE
+ * BACKUP SRAM GATES
  * ========================================================================= */
 
 /**
- * @brief  Copy data into battery-backed RAM (RAM_D3) via SVC.
+ * @brief  Copy data into the backup SRAM (4 KB at 0x38800000) via SVC.
  *
  * @details On target this issues an SVC that runs a validated memcpy in
  *          privileged mode, allowing unprivileged tasks to persist data
- *          into BKPRAM without an MPU region grant.  Under HOST_TEST the
- *          call is a no-op that returns true.
+ *          without an MPU grant.  The region is mapped non-cacheable, so
+ *          the data is in the SRAM when the call returns and survives a
+ *          system or watchdog reset (and power loss while VBAT is held).
+ *          Under HOST_TEST the offset/length check is the same, but host
+ *          addresses are not target addresses, so the source buffer is only
+ *          checked for NULL and wrap-around; the data goes to a host buffer
+ *          that survives simulated resets.
  *
- * @param[in] src     Source buffer (caller-owned, any memory domain).
- * @param[in] offset  Byte offset into BKPRAM (0 .. BSP_RAM_D3_SIZE-1).
+ * @param[in] src     Source buffer.  Must lie in memory the caller may pass
+ *                    to the kernel for reading (see svc_buffer_allowed():
+ *                    RAM_D1, the application DTCM half, the caller's own
+ *                    data-pool slot, internal flash or ITCM).  From a task
+ *                    it must not overlap the main stack at the top of
+ *                    RAM_D1.
+ * @param[in] offset  Byte offset into backup SRAM (0 .. BSP_BKPSRAM_SIZE-1).
  * @param[in] len     Number of bytes to copy (must be > 0).
  *
  * @retval true   Write completed successfully.
- * @retval false  Validation failed (offset+len exceeds BKPRAM, or len==0).
+ * @retval false  Validation failed (range outside backup SRAM, len == 0,
+ *                or a disallowed source buffer).
  */
 bool bkpram_write(const void *src, uint32_t offset, uint32_t len);
+
+/**
+ * @brief  Copy data out of the backup SRAM via SVC.
+ *
+ * @param[out] dst     Destination buffer.  Must be writable by the caller
+ *                     (RAM_D1, the application DTCM half or the caller's
+ *                     own data-pool slot; see svc_buffer_allowed()).  From
+ *                     a task it must not overlap the main stack at the top
+ *                     of RAM_D1; boot code on the main stack may read into
+ *                     its own locals.
+ * @param[in]  offset  Byte offset into backup SRAM.
+ * @param[in]  len     Number of bytes to copy (must be > 0).
+ *
+ * @retval true   Read completed successfully.
+ * @retval false  Validation failed (range outside backup SRAM, len == 0,
+ *                or a disallowed destination buffer); @p dst is untouched.
+ */
+bool bkpram_read(void *dst, uint32_t offset, uint32_t len);
+
+#ifdef HOST_TEST
+/** @brief Test hook: zero the host backup-SRAM store (simulated power loss). */
+void __bkpram_host_clear(void);
+#endif
+
+/**
+ * @brief  Number of MemManage faults recovered since boot (unprivileged
+ *         accesses the MPU rejected; the faulting instruction was skipped).
+ */
+uint32_t os_get_memmanage_fault_count(void);
 
 /* ============================================================================
  * PRIVILEGED IMPLEMENTATIONS (Internal - Do Not Call Directly)
@@ -169,6 +209,7 @@ void __os_start(void);
 void* __kernel_protected_data(uint16_t num_words);
 uint32_t* __kernel_get_stack(uint8_t task_idx);
 uint32_t* __kernel_get_data(uint8_t task_idx);
+void __kernel_current_data_slot(uintptr_t *base, uint32_t *size);
 
 #ifdef __cplusplus
 }

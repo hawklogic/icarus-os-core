@@ -101,13 +101,12 @@ ITCM_FUNC bool __event_drain(event_entry_t *out_buf, uint8_t max_entries,
         return false;
     }
 
-    /* Index of the oldest entry */
-    uint32_t tail;
-    if (ring_count < (uint32_t)EVENT_RING_SIZE) {
-        tail = 0u;
-    } else {
-        tail = ring_head; /* head points to oldest when full */
-    }
+    /* Index of the oldest entry: head is the next write slot, so the
+     * oldest of the ring_count live entries sits ring_count slots behind
+     * it.  Correct whether or not the ring has wrapped or been partially
+     * drained before. */
+    uint32_t tail = (ring_head + (uint32_t)EVENT_RING_SIZE - ring_count) %
+                    (uint32_t)EVENT_RING_SIZE;
 
     uint32_t to_drain = ring_count;
     if (to_drain > (uint32_t)max_entries) {

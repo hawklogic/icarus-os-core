@@ -34,6 +34,14 @@ void     cdc_rx_init(void);
 bool     cdc_rx_read_byte(uint8_t *out);
 uint32_t cdc_rx_available(void);
 
+/**
+ * @brief  Bytes discarded because the ring was full when they arrived.
+ * @details The ring holds CDC_RX_BUF_SIZE - 1 bytes; a producer that sends
+ *          faster than the consumer drains loses data silently otherwise.
+ * @return Count since the last cdc_rx_init().
+ */
+uint32_t cdc_rx_dropped(void);
+
 /* ---- Producer entry point ---------------------------------------------- */
 
 /**
@@ -54,6 +62,7 @@ void     __cdc_rx_init(void);
 void     __cdc_rx_push(const uint8_t *data, uint32_t len);
 bool     __cdc_rx_read_byte(uint8_t *out);
 uint32_t __cdc_rx_available(void);
+uint32_t __cdc_rx_dropped(void);
 
 #ifdef __cplusplus
 }

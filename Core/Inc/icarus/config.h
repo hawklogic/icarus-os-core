@@ -31,9 +31,9 @@ extern "C" {
  * ========================================================================= */
 
 #define ICARUS_VERSION_MAJOR    0
-#define ICARUS_VERSION_MINOR    2
+#define ICARUS_VERSION_MINOR    5
 #define ICARUS_VERSION_PATCH    0
-#define ICARUS_VERSION_STRING   "0.2.0"
+#define ICARUS_VERSION_STRING   "0.5.0"
 
 /* ============================================================================
  * KERNEL CONFIGURATION
@@ -155,7 +155,7 @@ extern "C" {
 #  define ITCM_FUNC       __attribute__((section(".itcm")))
 #  define DTCM_DATA_PRIV  __attribute__((section(".dtcm_priv")))
 #  define DTCM_DATA_OBC   __attribute__((section(".dtcm_obc")))
-#  define BKPRAM_DATA     __attribute__((section(".ram_d3")))
+#  define BKPRAM_DATA     __attribute__((section(".bkpsram")))
 #else
 #  define ITCM_FUNC
 #  define DTCM_DATA_PRIV

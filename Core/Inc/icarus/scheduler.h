@@ -158,6 +158,17 @@ uint32_t __os_get_task_dispatch_count(uint8_t task_idx);
 uint32_t __os_get_stack_watermark(uint8_t task_idx);
 void __os_update_stack_watermark(uint8_t task_idx);
 
+#ifdef HOST_TEST
+/**
+ * @brief  Host-only: advance the tick by @p ticks during every
+ *         task_active_sleep(), as if other tasks ran their time slices
+ *         before the sleeper was scheduled again.  0 (the default) keeps
+ *         the tick still.
+ * @param  ticks  Ticks added per sleep.
+ */
+void __sched_host_set_ticks_per_sleep(uint32_t ticks);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

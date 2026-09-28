@@ -101,6 +101,17 @@ ITCM_FUNC void __os_yield(void) {
     SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk;
 }
 
+#ifdef HOST_TEST
+/** Host-only: ticks that pass during each task_active_sleep(), standing in
+ *  for the other tasks' time slices before the sleeper runs again. */
+static uint32_t host_ticks_per_sleep;
+
+/** @copydoc __sched_host_set_ticks_per_sleep */
+void __sched_host_set_ticks_per_sleep(uint32_t ticks) {
+    host_ticks_per_sleep = ticks;
+}
+#endif
+
 /**
  * @brief Privileged implementation of task_active_sleep
  * @note  Internal function - use task_active_sleep() wrapper
@@ -110,6 +121,9 @@ ITCM_FUNC uint32_t __task_active_sleep(uint32_t ticks) {
     task_list[current_task_index]->ticks_to_pause = ticks;
     task_list[current_task_index]->task_state = TASK_STATE_BLOCKED;
     __os_yield();
+#ifdef HOST_TEST
+    os_tick_count += host_ticks_per_sleep;
+#endif
     return os_tick_count - task_list[current_task_index]->global_tick_paused;
 }
 

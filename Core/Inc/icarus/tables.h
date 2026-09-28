@@ -13,7 +13,7 @@
  * @date    2026
  *
  * @copyright Copyright 2025-2026 Souham Biswas
- *            https://github.com/ironhide23586/citarus-os-core
+ *            https://github.com/ironhide23586/icarus-os-core
  *            Licensed under the Apache License, Version 2.0
  */
 
@@ -64,7 +64,27 @@ typedef struct {
     tbl_activate_fn activate;           /**< Callback on tbl_activate()     */
 } tbl_descriptor_t;
 
+/**
+ * @brief  Copy-out view of a registered table, safe for unprivileged use.
+ */
+typedef struct {
+    tbl_id_t id;                  /**< Table identifier                     */
+    char     name[TBL_NAME_LEN];  /**< Human-readable name (NUL-terminated) */
+    uint16_t size;                /**< Expected table size in bytes         */
+    uint16_t schema_crc;          /**< Expected schema CRC                  */
+    uint16_t staged_len;          /**< Bytes currently staged               */
+    bool     staged_valid;        /**< Full-size load staged and checked    */
+    uint16_t active_len;          /**< Bytes in the active table (0 = none) */
+} tbl_info_t;
+
 /* ---- API ---------------------------------------------------------------- */
+
+/*
+ * From an unprivileged task, every buffer below must be memory the task may
+ * pass to the kernel (see svc_buffer_allowed()).  A rejected buffer makes
+ * the call fail (false, or -1 for tbl_dump()) without touching the table or
+ * the buffer.
+ */
 
 /**
  * @brief  Initialise the table registry. Must be called before any other
@@ -74,22 +94,47 @@ void     tbl_init(void);
 
 /**
  * @brief  Register a table descriptor.
- * @return true on success; false if registry is full or id is duplicate.
+ * @return true on success; false if registry is full or id is duplicate,
+ *         or @p desc was rejected.
  */
 bool     tbl_register(const tbl_descriptor_t *desc);
 
 /**
- * @brief  Load raw bytes into the staging buffer for a registered table.
+ * @brief  Write a chunk of a table into staging at an explicit offset.
  *
- * Supports chunked loads: call repeatedly with sequential offsets. The
- * first call clears the staging buffer; subsequent calls append. Once a
- * full descriptor-size load completes the data CRC16 is computed and the
- * staging buffer is marked valid.
+ * Chunked loads over a lossy link: offset 0 starts a new load; each next
+ * chunk must start where the staged data ends.  A chunk that falls
+ * entirely within bytes already staged is treated as a retransmit and
+ * accepted only if identical.  Gaps, overruns past the descriptor size,
+ * conflicting retransmits and a schema CRC that differs from the first
+ * chunk's are rejected without touching staging.  When the staged length
+ * reaches the descriptor size the data CRC is computed and staging is
+ * marked valid.
  *
- * @return true on success; false on unknown id or out-of-bounds write.
+ * @return true on success; false on any rejection, including a rejected
+ *         @p data buffer (staging is not touched).
+ */
+bool     tbl_load_at(tbl_id_t id, uint16_t offset, const uint8_t *data,
+                     uint16_t len, uint16_t schema_crc);
+
+/**
+ * @brief  Append bytes to the staging buffer (legacy form of tbl_load_at).
+ *
+ * Equivalent to tbl_load_at() at the current staged length, or at offset 0
+ * once a previous load completed.  Prefer tbl_load_at() for anything that
+ * can retransmit.
+ *
+ * @return true on success; false on unknown id, out-of-bounds write, or a
+ *         rejected @p data buffer.
  */
 bool     tbl_load(tbl_id_t id, const uint8_t *data, uint16_t len,
                   uint16_t schema_crc);
+
+/**
+ * @brief  Discard any staged (not yet activated) bytes for a table.
+ * @return true on success; false on unknown id.
+ */
+bool     tbl_abort(tbl_id_t id);
 
 /**
  * @brief  Activate a staged table after CRC validation.
@@ -108,15 +153,26 @@ bool     tbl_activate(tbl_id_t id);
 
 /**
  * @brief  Copy the *active* table bytes into @p out.
- * @return Number of bytes copied, or -1 on error (unknown id / no active).
+ * @return Number of bytes copied, or -1 on error (unknown id / no active,
+ *         or @p out rejected for @p max bytes).
  */
 int16_t  tbl_dump(tbl_id_t id, uint8_t *out, uint16_t max);
 
 /**
  * @brief  Look up a registered descriptor by id.
  * @return Pointer to descriptor, or NULL if not found.
+ * @warning The pointer refers to privileged memory.  Unprivileged code
+ *          must not dereference it; use tbl_get_info() instead.
  */
 const tbl_descriptor_t *tbl_get_descriptor(tbl_id_t id);
+
+/**
+ * @brief  Copy a table's descriptor fields and staging/active state out.
+ * @param[out] out  Destination (caller memory).
+ * @return true on success; false on unknown id, NULL @p out, or a rejected
+ *         @p out (left untouched).
+ */
+bool     tbl_get_info(tbl_id_t id, tbl_info_t *out);
 
 /**
  * @brief  Return the number of registered tables.
@@ -129,6 +185,11 @@ void                    __tbl_init(void);
 bool                    __tbl_register(const tbl_descriptor_t *desc);
 bool                    __tbl_load(tbl_id_t id, const uint8_t *data,
                                    uint16_t len, uint16_t schema_crc);
+bool                    __tbl_load_at(tbl_id_t id, uint16_t offset,
+                                      const uint8_t *data, uint16_t len,
+                                      uint16_t schema_crc);
+bool                    __tbl_abort(tbl_id_t id);
+bool                    __tbl_get_info(tbl_id_t id, tbl_info_t *out);
 /**
  * @brief  Validate a staged table and copy it into a caller-provided
  *         scratch buffer for the activate callback. The active buffer

@@ -1,8 +1,8 @@
 # Plan for Software Aspects of Certification (PSAC)
 
 **Document ID:** ICARUS-PSAC-001
-**Version:** 0.3
-**Date:** 2026-04-11
+**Version:** 0.4
+**Date:** 2026-09-27
 **Status:** Draft
 **Classification:** Public (Open Source)
 
@@ -25,6 +25,7 @@
 | 0.1 | 2025-01-26 | Souham Biswas | Initial draft |
 | 0.2 | 2026-04-01 | Souham Biswas | Aligned with v0.2.0 release: MPU-based memory protection added to the certification scope; SVC call gates expanded to 40 numbered services; supersedes the original "no MPU" assumption |
 | 0.3 | 2026-04-11 | Souham Biswas | Aligned with v0.3.0 release: shared service modules (CDC RX, event ring, CRC16 with HW peripheral, internal filesystem, ground-loadable table engine) added to the certification scope; SVC call gates expanded 40 → 57; software identification updated to track the new requirement set HLR-KRN-090..094 |
+| 0.4 | 2026-09-27 | Souham Biswas | Aligned with v0.5.0 release: SVC call gates expanded 63 → 94 (IDs 0–93) with caller-buffer validation (HLR-KRN-074); USB CDC output through a non-blocking transmit ring (HLR-BSP-027, HLR-BSP-028); `os_transmit_printf_task` removed from the deactivated-code list (the task no longer exists) |
 
 ---
 
@@ -90,7 +91,7 @@ The system provides the following high-level functions:
 | Task Management | Task creation, termination, sleep, and yield operations |
 | Interrupt Handling | SysTick timer, fault handlers, USB interrupts |
 | Hardware Abstraction | GPIO, I2C, SPI, display, LED control |
-| Debug Output | USB CDC serial output for diagnostics |
+| Debug Output | USB CDC serial output for diagnostics, through a non-blocking transmit ring that never stalls the caller |
 
 ### 2.3 System Architecture
 
@@ -176,7 +177,10 @@ The following code is present but not executed during normal operation:
 | Code | Purpose | Justification |
 |------|---------|---------------|
 | Fault handlers | Error recovery | Execute only on hardware faults |
-| `os_transmit_printf_task` | Debug output | Currently disabled in `os_init()` |
+
+`os_transmit_printf_task` was removed from the source before v0.2.0; its
+documentation entry is retired in v0.5.0. Console output now goes
+through the USB CDC transmit ring, which has no task of its own.
 
 See `ICARUS-VER-002 Deactivated Code Analysis` for complete analysis.
 

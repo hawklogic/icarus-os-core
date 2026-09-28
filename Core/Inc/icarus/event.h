@@ -74,6 +74,9 @@ void event_init(void);
  * @param  payload_len Payload length in bytes (truncated to 12).
  * @note   Never blocks. When the ring is full the oldest entry is
  *         implicitly overwritten.
+ * @note   From an unprivileged task, a non-NULL @p payload the task may not
+ *         pass to the kernel (the first min(@p payload_len, 12) bytes are
+ *         checked; see svc_buffer_allowed()) drops the event silently.
  */
 void os_event(uint8_t module_id, event_severity_t severity, uint16_t event_id,
               const void *payload, uint8_t payload_len);
@@ -96,6 +99,10 @@ event_severity_t event_get_squelch(uint8_t module_id);
  * @param  num_drained  [out] Number of entries actually copied.
  * @return true if at least one entry was copied; false if the ring was
  *         empty or out_buf was NULL.
+ * @note   From an unprivileged task, an @p out_buf or @p num_drained the
+ *         task may not write through the kernel (see svc_buffer_allowed())
+ *         returns false: nothing is drained and @p num_drained is not
+ *         written.
  */
 bool event_drain(event_entry_t *out_buf, uint8_t max_entries,
                  uint8_t *num_drained);

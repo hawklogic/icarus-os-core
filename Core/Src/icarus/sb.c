@@ -185,7 +185,7 @@ ITCM_FUNC uint8_t __sb_publish(sb_msg_id_t msg_id, const uint8_t *data,
     for (uint8_t i = 0u; i < r->count; i++) {
         uint8_t pidx = r->pipes[i];
         if (__pipe_can_enqueue(pidx, len)) {
-            __pipe_write_bytes(pidx, (uint8_t *)(uintptr_t)data, len);
+            (void)__pipe_write_bytes(pidx, (uint8_t *)(uintptr_t)data, len);
             delivered++;
         }
     }
@@ -220,8 +220,9 @@ ITCM_FUNC uint8_t __sb_route_count(void) {
  */
 void sb_init(void) {
 #ifndef HOST_TEST
-    __asm__ volatile ("svc %0\n" : : "I" (SVC_SB_INIT));
+    __asm__ volatile ("svc %0\n" : : "I" (SVC_SB_INIT) : "memory");
 #else
+    SVC_HOST_GATE();
     __sb_init();
 #endif
 }
@@ -244,10 +245,11 @@ bool sb_subscribe(sb_msg_id_t msg_id, uint8_t pipe_idx) {
         : "=r" (result)
         : "r" ((uint32_t)msg_id), "r" ((uint32_t)pipe_idx),
           "I" (SVC_SB_SUBSCRIBE)
-        : "r0", "r1"
+        : "r0", "r1", "memory"
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __sb_subscribe(msg_id, pipe_idx);
 #endif
 }
@@ -270,10 +272,11 @@ bool sb_unsubscribe(sb_msg_id_t msg_id, uint8_t pipe_idx) {
         : "=r" (result)
         : "r" ((uint32_t)msg_id), "r" ((uint32_t)pipe_idx),
           "I" (SVC_SB_UNSUBSCRIBE)
-        : "r0", "r1"
+        : "r0", "r1", "memory"
     );
     return (bool)result;
 #else
+    SVC_HOST_GATE();
     return __sb_unsubscribe(msg_id, pipe_idx);
 #endif
 }
@@ -297,10 +300,11 @@ uint8_t sb_publish(sb_msg_id_t msg_id, const uint8_t *data, uint8_t len) {
         : "=r" (result)
         : "r" ((uint32_t)msg_id), "r" ((uint32_t)(uintptr_t)data),
           "r" ((uint32_t)len), "I" (SVC_SB_PUBLISH)
-        : "r0", "r1", "r2"
+        : "r0", "r1", "r2", "memory"
     );
     return (uint8_t)result;
 #else
+    SVC_HOST_GATE();
     return __sb_publish(msg_id, data, len);
 #endif
 }
@@ -319,10 +323,11 @@ uint8_t sb_subscriber_count(sb_msg_id_t msg_id) {
         "mov %0, r0\n"
         : "=r" (result)
         : "r" ((uint32_t)msg_id), "I" (SVC_SB_SUBSCRIBER_COUNT)
-        : "r0"
+        : "r0", "memory"
     );
     return (uint8_t)result;
 #else
+    SVC_HOST_GATE();
     return __sb_subscriber_count(msg_id);
 #endif
 }
@@ -339,10 +344,11 @@ uint8_t sb_route_count(void) {
         "mov %0, r0\n"
         : "=r" (result)
         : "I" (SVC_SB_ROUTE_COUNT)
-        : "r0"
+        : "r0", "memory"
     );
     return (uint8_t)result;
 #else
+    SVC_HOST_GATE();
     return __sb_route_count();
 #endif
 }

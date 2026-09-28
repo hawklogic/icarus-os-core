@@ -30,6 +30,15 @@
  * SVC gates declared in icarus/cdc_rx.h.
  */
 #include "icarus/cdc_rx.h"
+/*
+ * All transmission goes through the kernel USB CDC transmit ring
+ * (bsp/cdc.h): the callbacks below advance it on transfer completion and
+ * reset its in-flight state when the interface is (re)initialised.  Only
+ * the ring calls CDC_Transmit_FS(), always with interrupts masked, so its
+ * TxState check-then-start cannot race.  DTR changes go to the ring, which
+ * drops output written while the port was closed (__cdc_tx_on_dtr()).
+ */
+#include "bsp/cdc.h"
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -102,6 +111,10 @@ uint8_t UserTxBufferFS[APP_TX_DATA_SIZE];
 
 /* USER CODE BEGIN PRIVATE_VARIABLES */
 
+/** Host DTR state, updated by SET_CONTROL_LINE_STATE (plain RAM_D1 so
+ *  unprivileged callers can read it). */
+static volatile uint8_t cdc_dtr_asserted = 0U;
+
 /* USER CODE END PRIVATE_VARIABLES */
 
 /**
@@ -162,6 +175,11 @@ static int8_t CDC_Init_FS(void)
   /* Set Application Buffers */
   USBD_CDC_SetTxBuffer(&hUsbDeviceFS, UserTxBufferFS, 0);
   USBD_CDC_SetRxBuffer(&hUsbDeviceFS, UserRxBufferFS);
+  /* A transfer in flight before this (re)configuration is gone.  Do not
+   * start one here: the class clears TxState after this callback and the
+   * device is not CONFIGURED yet.  The next write or the host opening the
+   * port (SET_CONTROL_LINE_STATE) restarts transmission. */
+  __cdc_tx_on_link_reset();
   return (USBD_OK);
   /* USER CODE END 3 */
 }
@@ -173,6 +191,12 @@ static int8_t CDC_Init_FS(void)
 static int8_t CDC_DeInit_FS(void)
 {
   /* USER CODE BEGIN 4 */
+  cdc_dtr_asserted = 0U;
+  /* USB reset or disconnect: the transfer in flight will never complete,
+   * and the host side of an open port is gone, so report it closed (drops
+   * what nobody will read, including the lost transfer's bytes). */
+  __cdc_tx_on_link_reset();
+  (void)__cdc_tx_on_dtr(false);
   return (USBD_OK);
   /* USER CODE END 4 */
 }
@@ -186,7 +210,6 @@ static int8_t CDC_DeInit_FS(void)
   */
 static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 {
-  (void)pbuf;
   (void)length;
   /* USER CODE BEGIN 5 */
   switch(cmd)
@@ -237,7 +260,21 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
     break;
 
     case CDC_SET_CONTROL_LINE_STATE:
-
+      /* wLength is 0 for this request, so the class driver passes the
+       * setup packet itself: wValue bit 0 = DTR, bit 1 = RTS. */
+      if (pbuf != NULL) {
+        const USBD_SetupReqTypedef *req = (const USBD_SetupReqTypedef *)(void *)pbuf;
+        uint8_t dtr = ((req->wValue & 0x0001U) != 0U) ? 1U : 0U;
+        /* The ring drops output written while the port was closed, on the
+         * close and on every reopen after the first open (see
+         * __cdc_tx_on_dtr()); a transfer in flight at the close may still
+         * arrive after the reopen. */
+        (void)__cdc_tx_on_dtr(dtr != 0U);
+        cdc_dtr_asserted = dtr;
+      }
+      /* The device is configured by now: send output queued while no
+       * host was attached. */
+      __cdc_tx_kick();
     break;
 
     case CDC_SEND_BREAK:
@@ -302,6 +339,13 @@ uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len)
   uint8_t result = USBD_OK;
   /* USER CODE BEGIN 7 */
   USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
+  /* Before the host configures the device (and after a disconnect) the
+   * class handle is NULL.  Dereferencing it read unrelated memory as
+   * TxState and reported BUSY forever, so callers retried every line.
+   * Report FAIL instead: nothing can be sent, and retrying cannot help. */
+  if ((hcdc == NULL) || (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED)) {
+    return USBD_FAIL;
+  }
   if (hcdc->TxState != 0){
     return USBD_BUSY;
   }
@@ -330,11 +374,23 @@ static int8_t CDC_TransmitCplt_FS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
   UNUSED(Buf);
   UNUSED(Len);
   UNUSED(epnum);
+  /* TxState is already clear: release the sent bytes and start the next
+   * run from the transmit ring. */
+  __cdc_tx_on_complete();
   /* USER CODE END 13 */
   return result;
 }
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
+
+/**
+  * @brief  Report whether the host currently asserts DTR.
+  * @retval 1 if DTR is asserted, 0 otherwise.
+  */
+uint8_t CDC_IsDtrAsserted(void)
+{
+  return cdc_dtr_asserted;
+}
 
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 

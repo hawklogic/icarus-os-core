@@ -28,6 +28,7 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define SVC_TASK_ACTIVE_SLEEP           0
 #define SVC_TASK_BLOCKING_SLEEP         1
@@ -150,16 +151,186 @@ extern "C" {
 #define SVC_FS_LIST                     84  /* uint8_t: enumerate files      */
 #define SVC_FS_STATS                    85  /* void: fill stats struct       */
 
+/* Backup SRAM read gate (data in BKPSRAM, priv-only)                      */
+#define SVC_BKPRAM_READ                 86  /* bool: memcpy BKPRAM→dst       */
+
+/* Table engine extensions                                                 */
+#define SVC_TBL_GET_INFO                87  /* bool: copy descriptor out     */
+#define SVC_TBL_ABORT                   88  /* bool: discard staging         */
+
+/* CRC engine for unprivileged callers                                     */
+#define SVC_CRC16_CCITT                 89  /* uint16_t: CRC over caller buf */
+
+/* System control                                                          */
+#define SVC_SYS_ENTER_BOOTLOADER        90  /* noreturn: jump to ROM loader  */
+
+/* CDC RX diagnostics                                                      */
+#define SVC_CDC_RX_DROPPED              91  /* uint32_t: bytes dropped (full)*/
+
+/* Offset-addressed table load                                             */
+#define SVC_TBL_LOAD_AT                 92  /* bool: write chunk at offset   */
+
+/* USB CDC transmit ring (data in DTCM_PRIV)                               */
+#define SVC_CDC_TX_WRITE                93  /* uint16_t: bytes queued        */
+
+/** @brief Highest SVC number in use.  Update when adding a new SVC. */
+#define SVC_MAX_NUMBER                  SVC_CDC_TX_WRITE
+
 /* ============================================================================
  * COMPILE-TIME SVC VALIDATION
  * ========================================================================= */
 
 /* SVC instruction encodes number in 1 byte (0-255) */
-_Static_assert(SVC_FS_STATS <= 255,
+_Static_assert(SVC_MAX_NUMBER <= 255,
                "Highest SVC number must fit in 8-bit immediate");
 
-_Static_assert(SVC_FS_STATS >= SVC_KERNEL_PROTECTED_DATA,
-               "SVC_FS_STATS must be >= all other SVC numbers");
+_Static_assert((SVC_MAX_NUMBER >= SVC_FS_STATS) &&
+               (SVC_MAX_NUMBER >= SVC_CDC_RX_DROPPED) &&
+               (SVC_MAX_NUMBER >= SVC_TBL_LOAD_AT) &&
+               (SVC_MAX_NUMBER >= SVC_CDC_TX_WRITE),
+               "SVC_MAX_NUMBER must be >= all other SVC numbers");
+
+/* ============================================================================
+ * CALLER BUFFER POLICY
+ * ========================================================================= */
+
+/**
+ * @brief  How a privileged SVC implementation touches a caller buffer.
+ */
+typedef enum {
+    SVC_ACCESS_READ  = 0,   /**< Kernel reads the buffer (caller → kernel).  */
+    SVC_ACCESS_WRITE = 1    /**< Kernel writes the buffer (kernel → caller). */
+} svc_access_t;
+
+/**
+ * @brief  The caller of an SVC, as the buffer policy sees it.
+ *
+ * @details Built by the dispatcher's buffer checks from the exception frame
+ *          it records on entry.  @c from_task is true when the exception
+ *          frame was stacked on the process stack (a task); it is false for
+ *          privileged thread code that still runs on the main stack (boot
+ *          code before the scheduler starts).
+ */
+typedef struct {
+    uintptr_t slot_base;        /**< Caller's data-pool slot start.           */
+    uint32_t  slot_size;        /**< Slot size in bytes (0 = no slot).        */
+    uintptr_t main_stack_base;  /**< Lowest address of the main-stack window. */
+    uint32_t  main_stack_size;  /**< Window size in bytes (0 = no window).    */
+    bool      from_task;        /**< Frame is on the process stack.           */
+} svc_caller_t;
+
+/**
+ * @brief  Pure allowlist check for a buffer an SVC handler will touch.
+ *
+ * @details SVC implementations copy with privilege, so the MPU does not
+ *          stop them.  Every caller-supplied pointer is therefore checked
+ *          against the memory an unprivileged task may legitimately own:
+ *          - write (and read): RAM_D1, the upper (application) DTCM half,
+ *            and the calling task's own data-pool slot;
+ *          - read only: internal flash and ITCM (constants and code).
+ *          Everything else — privileged DTCM, other tasks' data-pool slots,
+ *          SRAM4, backup SRAM, peripherals, the system control space and
+ *          unmapped addresses — is rejected.  The whole range must lie
+ *          inside one region.
+ *
+ *          The main stack sits at the top of RAM_D1 and holds the SVC
+ *          handler's own frame (saved registers and return address) while
+ *          the call runs.  For a task caller, a range that overlaps the
+ *          main-stack window is rejected for reads and writes, so a task
+ *          can neither redirect the privileged return nor read handler
+ *          state.  Privileged code that still runs on the main stack
+ *          (@c from_task false) may pass buffers there, such as locals in
+ *          boot code.
+ *
+ *          The window is the reserved main stack, [_estack - _Min_Stack_Size,
+ *          _estack).  It covers the handler's frame only while everything on
+ *          the main stack stays within that reservation: the frames left
+ *          by main() and os_start() (never unwound, since the first task is
+ *          launched from them), the SVC handler and any interrupts nested on
+ *          top of it.  An application whose main() keeps large locals must
+ *          raise _Min_Stack_Size to match.  Resetting MSP to _estack at the
+ *          first-task launch would remove this dependency; it is not done
+ *          yet.
+ *
+ *          The function has no state: the caller is a parameter, so the
+ *          policy can be unit-tested on the host with the target memory map.
+ *
+ * @param[in] addr    Buffer start address.
+ * @param[in] len     Buffer length in bytes (0 is allowed: nothing is
+ *                    touched).
+ * @param[in] access  @ref SVC_ACCESS_READ or @ref SVC_ACCESS_WRITE.
+ * @param[in] caller  The calling context (data-pool slot, main-stack window,
+ *                    stack the frame is on).  Must not be NULL.
+ *
+ * @retval true   @p addr is non-NULL, the range does not wrap, it does not
+ *                overlap the main-stack window when @p caller is a task, and
+ *                it lies wholly inside one region that permits @p access.
+ * @retval false  Otherwise, or @p caller is NULL.
+ */
+bool svc_buffer_allowed(uintptr_t addr, uint32_t len, svc_access_t access,
+                        const svc_caller_t *caller);
+
+/**
+ * @brief  Whether the caller may call a privileged implementation directly.
+ *
+ * @details True in handler mode (exceptions, interrupts, SVC implementations)
+ *          and in privileged thread mode (boot code before the scheduler
+ *          drops privilege).  Wrappers that must work from any context use
+ *          it to skip the SVC, which would fault from handler mode.
+ *          Always true under HOST_TEST.
+ *
+ * @retval true   Handler mode or privileged thread mode.
+ * @retval false  Unprivileged thread mode (a task): use the SVC gate.
+ */
+bool svc_caller_is_privileged(void);
+
+/* ============================================================================
+ * HOST-TEST NESTED-SVC GUARD
+ * ========================================================================= */
+
+#ifdef HOST_TEST
+/**
+ * @brief  Host-only guard that detects a nested supervisor call.
+ *
+ * @details On target, issuing an SVC while already executing inside the
+ *          SVC handler escalates to a HardFault.  Host builds call the
+ *          privileged implementations directly, so that class of bug is
+ *          invisible to unit tests.  Every SVC-gated wrapper therefore
+ *          opens a host "gate" on entry and closes it on return; opening a
+ *          gate while another is open (for example from a callback invoked
+ *          by a privileged implementation) is reported through the
+ *          nesting handler.  Wrappers that run thread-mode code on target
+ *          hold no gate while that code runs: spin loops gate only their
+ *          individual SVC calls, and table activation gates its prepare and
+ *          commit steps but not the callback between them.
+ *
+ * @par Usage (inside a wrapper's HOST_TEST branch):
+ * @code
+ *     SVC_HOST_GATE();
+ *     return __impl(args);
+ * @endcode
+ */
+typedef void (*svc_host_nesting_fn)(const char *outer, const char *inner);
+
+/** @brief Open a gate; returns a token for the matching close. */
+int  svc_host_gate_enter(const char *fn_name);
+/** @brief Close a gate (called automatically via the cleanup attribute). */
+void svc_host_gate_exit(int *token);
+/**
+ * @brief  Install a nesting handler.  NULL restores the default, which
+ *         prints both wrapper names and aborts the test process.
+ */
+void svc_host_set_nesting_handler(svc_host_nesting_fn fn);
+/** @brief Number of nesting violations observed since the last reset. */
+uint32_t svc_host_nesting_count(void);
+/** @brief Reset the gate depth and the violation counter. */
+void svc_host_gate_reset(void);
+
+#define SVC_HOST_GATE() \
+    int svc_host_gate_token_ \
+        __attribute__((cleanup(svc_host_gate_exit), unused)) = \
+        svc_host_gate_enter(__func__)
+#endif /* HOST_TEST */
 
 /* ============================================================================
  * SVC HANDLER (called from assembly - target only)

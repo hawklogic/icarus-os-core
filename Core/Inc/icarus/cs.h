@@ -17,9 +17,11 @@
  *      - Functions:    ITCM_FUNC (zero wait-state instruction fetch)
  *
  * @par Thread safety:
- *      All public functions use enter_critical() / exit_critical().
- *      cs_check_all() is designed to be called from a periodic task
- *      (e.g. 1 Hz from the FDIR monitor loop).
+ *      All public functions are SVC call gates; the region table is only
+ *      touched in privileged mode.  cs_check_all() is designed to be
+ *      called from a periodic task.  The scan itself runs inside the SVC;
+ *      the mismatch callback is invoked afterwards, in the calling task's
+ *      thread context, so it may use any kernel API.
  *
  * @see     icarus/crc.h for the underlying CRC16-CCITT implementation
  *
@@ -72,12 +74,38 @@ extern "C" {
  * @param[in] expected    Baseline CRC that was stored at registration.
  * @param[in] actual      CRC computed during the latest scan.
  *
- * @details The callback runs inside the critical section of
- *          cs_check_all().  Keep it short — typically just a
- *          fault injection call.
+ * @details The callback runs in the thread context of the task that
+ *          called cs_check_all(), after the privileged scan has returned.
+ *          It may therefore call any kernel API (logging, critical
+ *          sections, fault reporting).  Region index 0xFF signals that
+ *          the CRC engine self-test failed.
  */
 typedef void (*cs_mismatch_fn)(uint8_t region_idx, uint16_t expected,
                                uint16_t actual);
+
+/**
+ * @brief  One mismatch recorded by the privileged scan.
+ */
+typedef struct {
+    uint8_t  region_idx; /**< Failing region, or 0xFF for engine failure. */
+    uint16_t expected;   /**< Baseline CRC.                               */
+    uint16_t actual;     /**< CRC computed during the scan.               */
+} cs_mismatch_t;
+
+/**
+ * @brief  Result of one privileged scan, filled by __cs_check_all().
+ *
+ * @details The scan runs inside the SVC handler and must not call back
+ *          into user code; it records mismatches here instead, together
+ *          with the registered callback, and the thread-mode wrapper
+ *          delivers them.
+ */
+typedef struct {
+    cs_mismatch_fn callback;                   /**< Registered callback.  */
+    uint8_t        failures;                   /**< Regions that failed.  */
+    uint8_t        count;                      /**< Entries in mismatch[].*/
+    cs_mismatch_t  mismatch[CS_MAX_REGIONS + 1]; /**< +1 for engine fail. */
+} cs_scan_result_t;
 
 /**
  * @brief  Descriptor for a monitored memory region.
@@ -115,7 +143,10 @@ void cs_set_callback(cs_mismatch_fn fn);
  * @param[in] size  Size in bytes (must be > 0).
  *
  * @retval true   Region registered; baseline CRC computed and stored.
- * @retval false  Invalid index, NULL addr, or zero size.
+ * @retval false  Invalid index, NULL addr, or zero size; or, from an
+ *                unprivileged task, a region the task may not pass to the
+ *                kernel for reading (see svc_buffer_allowed()), in which
+ *                case nothing is registered.
  *
  * @note   The baseline CRC is computed immediately from the current
  *         memory contents.  Call this after the region is fully
@@ -151,8 +182,9 @@ bool cs_rebaseline(uint8_t idx);
  *
  * @return Number of regions that failed the CRC check.
  *
- * @note   Designed to be called periodically from a low-priority task
- *         (e.g. 1 Hz from the FDIR monitor loop).
+ * @note   Designed to be called periodically from a low-priority task.
+ *         The callback runs in the caller's thread context after the
+ *         scan completes; must not be called from an ISR.
  */
 uint8_t cs_check_all(void);
 
@@ -162,7 +194,9 @@ uint8_t cs_check_all(void);
  * @param[in]  idx  Region index.
  * @param[out] out  Destination for the region descriptor.
  * @retval true   Success.
- * @retval false  Invalid index or out is NULL.
+ * @retval false  Invalid index or out is NULL; or, from an unprivileged
+ *                task, @p out is not writable through the kernel (see
+ *                svc_buffer_allowed()) and is left untouched.
  */
 bool cs_get_region(uint8_t idx, cs_region_t *out);
 
@@ -180,7 +214,7 @@ void    __cs_set_callback(cs_mismatch_fn fn);
 bool    __cs_add_region(uint8_t idx, const uint8_t *addr, uint32_t size);
 bool    __cs_enable(uint8_t idx, bool enabled);
 bool    __cs_rebaseline(uint8_t idx);
-uint8_t __cs_check_all(void);
+uint8_t __cs_check_all(cs_scan_result_t *out);
 bool    __cs_get_region(uint8_t idx, cs_region_t *out);
 uint8_t __cs_region_count(void);
 

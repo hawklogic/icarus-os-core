@@ -145,6 +145,18 @@ volatile uint32_t g_last_fault_addr = 0;
 volatile uint32_t g_last_fault_pc = 0;
 
 /**
+ * @brief  Number of recovered MemManage faults since boot.
+ * @details Each one is an unprivileged access the MPU rejected and the
+ *          handler skipped; the faulting task read garbage or lost a
+ *          write.  Applications should telemeter this and treat a non-zero
+ *          value as a fault.
+ */
+uint32_t os_get_memmanage_fault_count(void)
+{
+  return g_memmanage_fault_count;
+}
+
+/**
   * @brief This function handles Memory management fault.
   *
   * @details If the fault is a recoverable data access violation (DACCVIOL)
@@ -200,7 +212,7 @@ void MemManage_Handler(void)
 
     g_memmanage_fault_count++;
     
-    /* Lower limit for ITCM protection debugging - fail fast after 3 faults */
+    /* Halt after more than 30 recovered faults since boot */
     if (g_memmanage_fault_count > 30) {
       /* Fault info captured in g_last_fault_addr and g_last_fault_pc */
       /* Fall through to halt with 4 blinks */
@@ -353,7 +365,15 @@ ITCM_FUNC void SysTick_Handler(void)
   
   os_tick_count++;
 
-  if ((os_running != 0u) && (--current_task_ticks_remaining == 0u) && (scheduler_enabled)) {
+  /* Count the slice down, saturating at zero.  If the slice expires inside
+   * a critical section (scheduler disabled) the switch is deferred to the
+   * first tick after the section ends.  Decrementing unconditionally here
+   * used to wrap the counter to 0xFFFFFFFF, so that task was never
+   * preempted again until it yielded on its own. */
+  if ((os_running != 0u) && (current_task_ticks_remaining > 0u)) {
+    current_task_ticks_remaining--;
+  }
+  if ((os_running != 0u) && (current_task_ticks_remaining == 0u) && (scheduler_enabled)) {
     current_task_ticks_remaining = ICARUS_TICKS_PER_TASK;  // Reset for next task
     SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk;
   }

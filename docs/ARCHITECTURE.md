@@ -1,6 +1,6 @@
 # ICARUS OS Architecture
 
-**Version:** 0.3.0
+**Version:** 0.5.0
 **Target:** STM32H750VBT6 (ARM Cortex-M7 @ 480MHz)
 **Author:** Souham Biswas
 **Date:** 2026
@@ -44,12 +44,12 @@ ICARUS OS is a preemptive real-time operating system kernel designed for safety-
 │  Internal flat-file FS · Ground-loadable table engine        │
 ├─────────────────────────────────────────────────────────────┤
 │                      KERNEL LAYER                            │
-│  Scheduler, Context Switch, SVC Handler (63 gates),          │
-│  MPU Manager                                                 │
+│  Scheduler, Context Switch, SVC Handler (94 gates),          │
+│  MPU Manager, SVC caller-buffer allowlist, backup SRAM       │
 ├─────────────────────────────────────────────────────────────┤
 │                   BOARD SUPPORT PACKAGE                      │
 │  GPIO, SPI, I2C, USB, Display, RTC, Timer                    │
-│  IWDG watchdog · K1 button · CDC raw write                   │
+│  IWDG watchdog · K1 button · CDC transmit ring · bootloader  │
 ├─────────────────────────────────────────────────────────────┤
 │                    HARDWARE LAYER                            │
 │  STM32H750VBT6 (Cortex-M7, MPU, NVIC, SysTick, CRC unit)     │
@@ -68,8 +68,34 @@ shared service modules:
 2. **Scheduler** (`scheduler.c/h`) - Task selection and time-slicing
 3. **Task Manager** (`task.c/h`) - Task lifecycle and registration
 4. **Context Switch** (`context_switch.s`) - Low-level task switching
-5. **SVC Handler** (`svc.c/h`) - Privilege separation and call gates (63 SVC numbers)
-6. **IPC Manager** (`semaphore.c/h`, `pipe.c/h`) - Inter-process communication
+   (`os_yield_pendsv`, entered from PendSV). Each switched-out task keeps
+   R4–R11 and its own EXC_RETURN on its stack, plus S16–S31 when its
+   EXC_RETURN shows an extended (FP) frame; the hardware frame holds
+   S0–S15 and FPSCR. Saving S16–S31 also completes any pending lazy
+   stacking before the MPU is reprogrammed for the next task, and a task
+   that has never run starts with EXC_RETURN 0xFFFFFFFD (since v0.5.0;
+   verified on target, since the switch is mocked on the host)
+5. **SVC Handler** (`svc.c/h`) - Privilege separation and call gates (94 SVC
+   numbers, IDs 0–93). Since v0.5.0 every caller buffer an SVC
+   implementation touches is checked against an allowlist first
+   (`svc_buffer_allowed()`): writes only to RAM_D1, the application
+   (upper) DTCM half or the caller's own data-pool slot; reads also from
+   internal flash and ITCM. For a task caller the main-stack window at the
+   top of RAM_D1, which holds the handler's own frame, is rejected for
+   reads and writes. The window is the reserved `_Min_Stack_Size`, so it
+   covers the handler's frame only while the never-unwound `main()` /
+   `os_start()` frames, the SVC handler and nested interrupts fit in it
+   (MSP is not yet reset at first-task launch). A rejected call returns
+   its failure value and touches no memory (every dispatch case's check is enforced by
+   `tools/check_svc_pointer_checks.py`). Every SVC inline-asm block
+   clobbers `"memory"` (checked by `tools/check_svc_clobbers.py`); both
+   checks run in `make -C tests`. Host builds abort on a nested SVC
+   (`SVC_HOST_GATE`)
+6. **IPC Manager** (`semaphore.c/h`, `pipe.c/h`) - Inter-process communication.
+   `semaphore_consume_timeout()` runs in the calling task's thread mode
+   and measures its timeout on the system tick (wrap-safe), so a busy
+   system does not stretch it; SVC 58 is not used and its dispatch case
+   returns false (since v0.5.0)
 
 **Shared service modules** (added in v0.3.0, all reachable through
 `#include "icarus/icarus.h"`):
@@ -77,15 +103,18 @@ shared service modules:
 7. **CDC RX ring buffer** (`cdc_rx.c/h`) - 512 B SPSC USB CDC receive ring;
    producer is the privileged USB ISR, consumer is any RTOS task. Backing
    data in `DTCM_DATA_PRIV`, hot path in `ITCM_FUNC`, thread-mode reads
-   through SVC gates 40–42.
+   through SVC gates 40–42; overflow drops counted (`cdc_rx_dropped()`,
+   SVC 91).
 8. **Event ring + squelch** (`event.c/h`) - 32-slot ring of compact 16-byte
    event entries with a 16-entry per-module severity squelch. Transport-
    agnostic (drains into a caller-provided buffer). SVC gates 43–48.
 9. **CRC16-CCITT helper** (`crc.c/h`) - `crc16_ccitt(data, len)` with poly
    0x1021. **Hardware-accelerated** on STM32H7 via the on-chip CRC
    peripheral on the AHB4 bus, lazy-initialised on first call;
-   approximately 4× faster than the bytewise software loop. Portable
-   bytewise fallback under `HOST_TEST`.
+   approximately 4× faster than the bytewise software loop. Each
+   computation runs in a critical section that touches privileged
+   scheduler state, so `crc16_ccitt()` called from an unprivileged task
+   goes through SVC 89. Portable bytewise fallback under `HOST_TEST`.
 10. **Internal flat-file filesystem** (`fs.c/h`) - 16 files × 2 KB = 32 KB
     RAM-backed store. Functions placed in ITCM. The store itself stays in
     regular SRAM (32 KB won't fit DTCM); the deliberate trade-off is
@@ -96,18 +125,52 @@ shared service modules:
     `tbl_activate` operation is split across two SVCs (`prepare` +
     `commit`) so the user callback runs in unprivileged thread mode against
     a stack scratch copy without ever touching `DTCM_PRIV` directly.
-    SVC gates 49–56.
+    SVC gates 49–56; v0.5.0 adds offset-addressed chunk loads
+    (`tbl_load_at`, 92), `tbl_abort` (88) and a copy-out `tbl_get_info`
+    (87), and accepts a commit only right after a matching prepare.
 12. **Software Bus** (`sb.c/h`) - Lightweight pub/sub message router built
     on top of kernel pipes. 32 routes × 4 subscribers per message ID.
     Best-effort delivery: if a subscriber's pipe is full the message is
     silently dropped for that subscriber. Route table in `DTCM_DATA_PRIV`,
-    hot-path functions in `ITCM_FUNC`. Uses existing pipe SVC gates for
-    the underlying IPC.
+    hot-path functions in `ITCM_FUNC`. SVC gates 72–77; inside the
+    handler the bus calls the `__pipe_*` implementations directly.
 13. **Background Checksum integrity monitor** (`cs.c/h`) - Periodic
     CRC16-CCITT scanner over up to 8 registered memory regions. Baselines
     captured at registration time; mismatches reported through a
-    user-supplied callback. Hardware CRC self-test on init (expected
+    user-supplied callback, which runs in the calling task's thread mode
+    after the scan's SVC returns. Hardware CRC self-test on init (expected
     0x29B1). Region table in `DTCM_DATA_PRIV`, functions in `ITCM_FUNC`.
+    SVC gates 63–70.
+
+**Board-level services** (`Core/Src/bsp/`):
+
+14. **USB CDC transmit ring** (`bsp/cdc.c/h`) - One 4 KB ring in
+    privileged DTCM carries all USB CDC output: `printf` (a strong
+    `_write()` in `retarget_stdio.c`), `__io_putchar`, `CDC_Write` and
+    `cdc_tx_write` (SVC 93 for tasks). Producers copy in and return;
+    nothing waits, sleeps or retries. `CDC_Write` is all-or-nothing and
+    returns false when the ring is full; console output keeps what fits
+    and counts the rest (`stdio_get_tx_dropped()`). Bytes stay in the
+    ring until the transfer-complete interrupt releases them, a USB reset
+    or re-configuration clears the in-flight state, and output queued
+    before a host attaches (or while the bus is suspended) is sent when it
+    opens the port (or the bus resumes; the resume callback first
+    restarts the PHY clock stopped at suspend). When the host closes the
+    port (DTR 1 → 0), when it reopens it after an earlier open, and when
+    the link is lost while the port is open, the bytes queued behind the
+    transfer in flight are discarded and counted as dropped; the first
+    open since boot keeps them, so boot output is still sent. A transfer
+    already in flight is never discarded, so up to `CDC_TX_MAX_CHUNK`
+    (2048) bytes written before a close can still arrive after the
+    reopen.
+15. **ROM bootloader entry** (`bsp/bootloader.c/h`) -
+    `sys_enter_bootloader()` (SVC 90) records a request in reset-surviving
+    RAM and resets; startup code jumps to the ROM USB DFU bootloader
+    before clocks and the watchdog are set up.
+16. **Backup SRAM gates** (`bkpram_write` SVC 71, `bkpram_read` SVC 86) -
+    4 KB at 0x38800000, mapped by MPU region 8 as privileged and
+    non-cacheable so written data survives a reset. Offset, length and
+    the caller buffer are checked on every call.
 
 Headers and sources live under `Core/Inc/icarus/` and `Core/Src/icarus/`
 (not `kernel/`).
@@ -149,7 +212,7 @@ int8_t current_cleanup_task_idx;                      // Queue write index
    └─> Call SystemInit()
 
 2. SystemInit() (system_stm32h7xx.c)
-   ├─> Configure MPU (8 regions)
+   ├─> Configure MPU (9 regions)
    ├─> Enable I-Cache and D-Cache
    ├─> Configure FPU
    └─> Set vector table offset
@@ -186,7 +249,8 @@ int8_t current_cleanup_task_idx;                      // Queue write index
 | DTCM | 0x20000000 | 128KB | Kernel data (zero wait-state) | Priv RW only (MPU Region 5) |
 | RAM_D1 | 0x24000000 | 512KB | Task stacks, display buffers | Full access (MPU Region 6) |
 | RAM_D2 | 0x30000000 | 288KB | Task data regions (2KB each) | Dynamic (MPU Region 4) |
-| RAM_D3 | 0x38000000 | 64KB | Reserved for future use | Full access |
+| RAM_D3 (SRAM4) | 0x38000000 | 64KB | Reset-surviving bootloader request word (`.ram_d3`) | Privileged default map (no unprivileged access) |
+| Backup SRAM | 0x38800000 | 4KB | Reset-surviving data (`.bkpsram`, `bkpram_*` SVCs) | Priv RW, non-cacheable (MPU Region 8) |
 | Flash | 0x08000000 | 128KB | Program code and constants | RO+Exec (MPU Region 2) |
 | QSPI | 0x90000000 | 8MB | External flash (future) | RO+Exec (MPU Region 1) |
 | Peripherals | 0x40000000 | 512MB | Memory-mapped I/O | Full access (MPU Region 7) |
@@ -237,7 +301,8 @@ Flash (0x08000000 - 0x0801FFFF) [128KB]
 
 ### MPU Configuration
 
-ICARUS OS uses 8 MPU regions for memory protection:
+ICARUS OS uses 9 MPU regions for memory protection (see
+`Core/Src/bsp/mpu.c` for the authoritative settings):
 
 ```c
 // Region 0: ITCM (kernel code protection)
@@ -255,8 +320,11 @@ Base: 0x08000000, Size: 128KB
 Access: Priv+User RO+Exec
 Purpose: Protect program code from modification
 
-// Region 3: DISABLED
-Purpose: Reserved for future use
+// Region 3: Application DTCM (upper half)
+Base: 0x20010000, Size: 64KB
+Access: Priv+User RW, execute-never
+Purpose: Zero wait-state application data (region 5 disables its
+         upper subregions so this region governs them)
 
 // Region 4: Task Data (dynamic)
 Base: Varies per task, Size: 2KB
@@ -278,5 +346,16 @@ Purpose: Task stacks and shared buffers
 Base: 0x40000000, Size: 512MB
 Access: Full Access
 Purpose: Memory-mapped I/O access
+
+// Region 8: Backup SRAM (v0.5.0)
+Base: 0x38800000, Size: 4KB
+Access: Priv RW only, non-cacheable, execute-never
+Purpose: Reset-surviving data; non-cacheable so writes reach the SRAM
+         before a reset instead of dying in a dirty D-cache line
 ```
+
+The MPU is enabled with the privileged default background map, so
+unprivileged access to anything not listed (system control space, SRAM4)
+faults. SVC implementations copy with privilege, so the kernel applies
+its own, narrower allowlist to caller buffers (see SVC Handler above).
 

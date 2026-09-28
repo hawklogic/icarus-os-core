@@ -31,6 +31,10 @@ extern "C" {
 #define BSP_DTCM_BASE           0x20000000UL
 #define BSP_DTCM_SIZE           (128 * 1024)
 
+/** @brief Upper DTCM half: unprivileged application data (64KB, user RW) */
+#define BSP_DTCM_APP_BASE       (BSP_DTCM_BASE + (BSP_DTCM_SIZE / 2))
+#define BSP_DTCM_APP_SIZE       (BSP_DTCM_SIZE / 2)
+
 /** @brief Upper DTCM for OBC application hot data (64KB, unprivileged RW) */
 #define BSP_DTCM_OBC_BASE      0x20010000UL
 #define BSP_DTCM_OBC_SIZE      (64 * 1024)
@@ -42,9 +46,13 @@ extern "C" {
 #define BSP_RAM_D2_BASE         0x30000000UL
 #define BSP_RAM_D2_SIZE         (288 * 1024)
 
-/** @brief AHB SRAM (RAM_D3) base address (64KB) */
+/** @brief AHB SRAM4 (RAM_D3) base address (64KB) — not battery backed */
 #define BSP_RAM_D3_BASE         0x38000000UL
 #define BSP_RAM_D3_SIZE         (64 * 1024)
+
+/** @brief Backup SRAM base address (4KB) — retained on VBAT and resets */
+#define BSP_BKPSRAM_BASE        0x38800000UL
+#define BSP_BKPSRAM_SIZE        (4 * 1024)
 
 /** @brief Internal Flash base address (128KB) */
 #define BSP_FLASH_BASE          0x08000000UL
@@ -69,6 +77,7 @@ extern "C" {
 #define MPU_REGION_DTCM              MPU_REGION_NUMBER5
 #define MPU_REGION_RAM_D1            MPU_REGION_NUMBER6
 #define MPU_REGION_PERIPH            MPU_REGION_NUMBER7
+#define MPU_REGION_BKPSRAM           MPU_REGION_NUMBER8
 
 
 /**
@@ -108,15 +117,16 @@ _Static_assert(TASK_DATA_SIZE_BYTES == 2048u,
 /**
  * @brief   Configure Memory Protection Unit regions
  *
- * @details Sets up 8 MPU regions for memory protection:
+ * @details Sets up 9 MPU regions for memory protection:
  *          - Region 0: ITCM (read-only for all, prevents code modification)
  *          - Region 1: QSPI Flash (read-only, cacheable)
  *          - Region 2: Internal Flash (read-only, cacheable)
- *          - Region 3: DISABLED (consolidated with Region 0)
+ *          - Region 3: Upper DTCM (application hot data, full access)
  *          - Region 4: Task Data (dynamic, configured per context switch)
  *          - Region 5: DTCM (privileged-only, protects kernel data)
  *          - Region 6: RAM_D1 (shared buffers, full access)
  *          - Region 7: Peripherals (device memory, full access)
+ *          - Region 8: Backup SRAM (privileged-only, non-cacheable)
  *
  * @par Region Configuration:
  *      | Region | Base       | Size  | Access         | Purpose                |

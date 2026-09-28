@@ -82,8 +82,8 @@ ITCM_FUNC bool __pipe_enqueue(uint8_t pipe_idx, uint8_t *message,
         (void)task_active_sleep(1);
     }
 
-    pipe_write_bytes(pipe_idx, message, message_bytes);
-    return true;
+    /* False if the gate rejected the message buffer. */
+    return pipe_write_bytes(pipe_idx, message, message_bytes);
 }
 
 /**
@@ -112,8 +112,8 @@ ITCM_FUNC bool __pipe_dequeue(uint8_t pipe_idx, uint8_t *message,
         (void)task_active_sleep(1);
     }
 
-    pipe_read_bytes(pipe_idx, message, message_bytes);
-    return true;
+    /* False if the gate rejected the destination buffer. */
+    return pipe_read_bytes(pipe_idx, message, message_bytes);
 }
 
 /**
@@ -170,13 +170,14 @@ ITCM_FUNC bool __pipe_can_dequeue(uint8_t pipe_idx, uint8_t message_bytes) {
 
 /**
  * @brief Privileged write gate: write bytes to pipe buffer
+ * @return true if copied, false if the pipe is invalid or not engaged
  * @note  Called after pipe_can_enqueue() spin loop exits
  *        Runs in privileged SVC handler — already atomic, no critical section needed
  */
-ITCM_FUNC void __pipe_write_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes) {
+ITCM_FUNC bool __pipe_write_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes) {
     if ((pipe_idx >= (uint8_t)ICARUS_MAX_MESSAGE_QUEUES) ||
         (!message_pipe_list[pipe_idx]->engaged)) {
-        return;
+        return false;
     }
 
     for (uint8_t i = 0; i < message_bytes; i++) {
@@ -189,17 +190,19 @@ ITCM_FUNC void __pipe_write_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t me
     }
 
     message_pipe_list[pipe_idx]->tick_updated_at = os_tick_count;
+    return true;
 }
 
 /**
  * @brief Privileged write gate: read bytes from pipe buffer
+ * @return true if copied out, false if the pipe is invalid or not engaged
  * @note  Called after pipe_can_dequeue() spin loop exits
  *        Runs in privileged SVC handler — already atomic, no critical section needed
  */
-ITCM_FUNC void __pipe_read_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes) {
+ITCM_FUNC bool __pipe_read_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes) {
     if ((pipe_idx >= (uint8_t)ICARUS_MAX_MESSAGE_QUEUES) ||
         (!message_pipe_list[pipe_idx]->engaged)) {
-        return;
+        return false;
     }
 
     for (uint8_t i = 0; i < message_bytes; i++) {
@@ -212,4 +215,5 @@ ITCM_FUNC void __pipe_read_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t mes
     }
 
     message_pipe_list[pipe_idx]->tick_updated_at = os_tick_count;
+    return true;
 }

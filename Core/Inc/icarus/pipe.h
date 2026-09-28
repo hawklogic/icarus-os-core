@@ -40,8 +40,12 @@ bool pipe_init(uint8_t pipe_idx, uint16_t pipe_capacity_bytes);
  * @param pipe_idx      Pipe index
  * @param message       Data to enqueue
  * @param message_bytes Number of bytes
- * @return true on success
+ * @return true on success; false if the pipe is invalid or @p message was
+ *         rejected
  * @note  Blocks if insufficient space
+ * @note  From an unprivileged task, @p message is checked after the wait
+ *        for space: a buffer the task may not pass to the kernel (see
+ *        svc_buffer_allowed()) returns false and nothing is enqueued.
  * @note  Placed in ITCM for zero wait-state execution
  */
 bool pipe_enqueue(uint8_t pipe_idx, uint8_t* message, uint8_t message_bytes);
@@ -51,8 +55,12 @@ bool pipe_enqueue(uint8_t pipe_idx, uint8_t* message, uint8_t message_bytes);
  * @param pipe_idx      Pipe index
  * @param message       Buffer to receive data
  * @param message_bytes Number of bytes to read
- * @return true on success
+ * @return true on success; false if the pipe is invalid or @p message was
+ *         rejected
  * @note  Blocks if insufficient data
+ * @note  From an unprivileged task, @p message is checked after the wait
+ *        for data: a buffer the task may not write through the kernel (see
+ *        svc_buffer_allowed()) returns false and the bytes stay in the pipe.
  * @note  Placed in ITCM for zero wait-state execution
  */
 bool pipe_dequeue(uint8_t pipe_idx, uint8_t* message, uint8_t message_bytes);
@@ -98,20 +106,26 @@ bool pipe_can_dequeue(uint8_t pipe_idx, uint8_t message_bytes);
  * @param pipe_idx Pipe index
  * @param message Pointer to message data
  * @param message_bytes Number of bytes to write
+ * @return true if the bytes were copied; false if the pipe is invalid or
+ *         not engaged, or @p message is not a buffer the caller may pass
+ *         to the kernel (nothing is copied)
  * @note  Uses SVC to write message_pipe_list in DTCM from privileged mode
  * @note  Called after pipe_can_enqueue() spin loop exits
  */
-void pipe_write_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes);
+bool pipe_write_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes);
 
 /**
  * @brief Read bytes from pipe (SVC call gate)
  * @param pipe_idx Pipe index
  * @param message Pointer to buffer for message data
  * @param message_bytes Number of bytes to read
+ * @return true if the bytes were copied out; false if the pipe is invalid
+ *         or not engaged, or @p message is not writable by the caller
+ *         (the bytes stay in the pipe)
  * @note  Uses SVC to read message_pipe_list in DTCM from privileged mode
  * @note  Called after pipe_can_dequeue() spin loop exits
  */
-void pipe_read_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes);
+bool pipe_read_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes);
 
 /* ============================================================================
  * PRIVILEGED IMPLEMENTATIONS (Internal - Do Not Call Directly)
@@ -124,8 +138,8 @@ uint16_t __pipe_get_count(uint8_t pipe_idx);
 uint16_t __pipe_get_max_count(uint8_t pipe_idx);
 bool __pipe_can_enqueue(uint8_t pipe_idx, uint8_t message_bytes);
 bool __pipe_can_dequeue(uint8_t pipe_idx, uint8_t message_bytes);
-void __pipe_write_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes);
-void __pipe_read_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes);
+bool __pipe_write_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes);
+bool __pipe_read_bytes(uint8_t pipe_idx, uint8_t *message, uint8_t message_bytes);
 
 #ifdef __cplusplus
 }

@@ -50,6 +50,8 @@ typedef struct {
     /* Active side */
     uint8_t  active[TBL_MAX_SIZE];
     uint16_t active_len;        /**< Bytes in active buffer (0 = none)        */
+
+    bool     prepared;          /**< activate_prepare done, commit pending    */
 } tbl_slot_t;
 
 DTCM_DATA_PRIV static tbl_slot_t registry[TBL_MAX_REGISTERED];
@@ -97,8 +99,29 @@ ITCM_FUNC bool __tbl_register(const tbl_descriptor_t *desc) {
     return true;
 }
 
-ITCM_FUNC bool __tbl_load(tbl_id_t id, const uint8_t *data, uint16_t len,
-                          uint16_t schema_crc) {
+/** @brief Discard any staged bytes for a slot. */
+ITCM_FUNC static void staging_reset(tbl_slot_t *slot, uint16_t schema_crc) {
+    (void)memset(slot->staging, 0, sizeof(slot->staging));
+    slot->staged_len        = 0;
+    slot->staged_valid      = false;
+    slot->staged_schema_crc = schema_crc;
+    slot->prepared          = false;
+}
+
+/**
+ * @brief  Offset-addressed staging write.
+ * @details
+ *   - offset 0 starts a new load (discarding any previous staging).
+ *   - offset == bytes staged so far appends the next chunk.
+ *   - a chunk entirely inside the already-staged range is a retransmit:
+ *     accepted if identical, rejected if it conflicts.
+ *   - a gap (offset beyond the staged length), an overrun past the
+ *     descriptor size, or a schema CRC that differs from the first chunk's
+ *     is rejected and leaves staging unchanged.
+ */
+ITCM_FUNC bool __tbl_load_at(tbl_id_t id, uint16_t offset,
+                             const uint8_t *data, uint16_t len,
+                             uint16_t schema_crc) {
     if ((data == NULL) || (len == 0u)) {
         return false;
     }
@@ -108,24 +131,35 @@ ITCM_FUNC bool __tbl_load(tbl_id_t id, const uint8_t *data, uint16_t len,
         return false;
     }
 
-    /* First chunk (or re-load after a completed/failed activation): reset
-       staging.  We consider staging "ready for reset" when either it is
-       empty (staged_len == 0) or a previous full-size load has already been
-       validated (staged_valid == true). */
-    if ((slot->staged_len == 0u) || slot->staged_valid) {
-        (void)memset(slot->staging, 0, sizeof(slot->staging));
-        slot->staged_len        = 0;
-        slot->staged_valid      = false;
-        slot->staged_schema_crc = schema_crc;
+    uint32_t end = (uint32_t)offset + (uint32_t)len;
+    if (end > (uint32_t)slot->desc.size) {
+        return false;                                   /* overrun */
     }
 
-    /* Bounds check */
-    if (((uint32_t)slot->staged_len + (uint32_t)len) > (uint32_t)TBL_MAX_SIZE) {
-        return false;
+    if (offset == 0u) {
+        /* Identical retransmit of the first chunk of a load in progress
+         * must not throw away the chunks that followed it. */
+        bool retransmit = (slot->staged_len >= len) && !slot->staged_valid &&
+                          (slot->staged_schema_crc == schema_crc) &&
+                          (memcmp(slot->staging, data, len) == 0);
+        if (retransmit) {
+            return true;
+        }
+        staging_reset(slot, schema_crc);
+    } else if (schema_crc != slot->staged_schema_crc) {
+        return false;                                   /* mixed loads */
+    } else if (end <= (uint32_t)slot->staged_len) {
+        /* Retransmit of bytes we already hold. */
+        return memcmp(&slot->staging[offset], data, len) == 0;
+    } else if (offset != slot->staged_len) {
+        return false;                                   /* gap or overlap */
+    } else {
+        /* sequential append */
     }
 
-    (void)memcpy(&slot->staging[slot->staged_len], data, len);
-    slot->staged_len = (uint16_t)(slot->staged_len + len);
+    (void)memcpy(&slot->staging[offset], data, len);
+    slot->staged_len = (uint16_t)end;
+    slot->prepared   = false;
 
     /* Mark valid and compute data CRC once we have a full descriptor-size load */
     if (slot->staged_len == slot->desc.size) {
@@ -133,6 +167,26 @@ ITCM_FUNC bool __tbl_load(tbl_id_t id, const uint8_t *data, uint16_t len,
         slot->staged_valid    = true;
     }
 
+    return true;
+}
+
+ITCM_FUNC bool __tbl_load(tbl_id_t id, const uint8_t *data, uint16_t len,
+                          uint16_t schema_crc) {
+    tbl_slot_t *slot = find_slot(id);
+    if (slot == NULL) {
+        return false;
+    }
+    /* Legacy append semantics: a completed staging starts a new load. */
+    uint16_t offset = slot->staged_valid ? 0u : slot->staged_len;
+    return __tbl_load_at(id, offset, data, len, schema_crc);
+}
+
+ITCM_FUNC bool __tbl_abort(tbl_id_t id) {
+    tbl_slot_t *slot = find_slot(id);
+    if (slot == NULL) {
+        return false;
+    }
+    staging_reset(slot, 0u);
     return true;
 }
 
@@ -170,9 +224,16 @@ ITCM_FUNC bool __tbl_activate_prepare(tbl_id_t id, uint8_t *out_data,
     (void)memcpy(out_data, slot->staging, slot->staged_len);
     *out_len      = slot->staged_len;
     *out_activate = slot->desc.activate;
+    slot->prepared = true;
     return true;
 }
 
+/**
+ * @details Only accepted right after a successful prepare for the same
+ *          table, with the descriptor-size length and data identical to
+ *          what was staged, so a stray commit cannot install arbitrary
+ *          bytes as the active table.
+ */
 ITCM_FUNC bool __tbl_activate_commit(tbl_id_t id, const uint8_t *data,
                                      uint16_t len) {
     if ((data == NULL) || (len == 0u) || (len > (uint16_t)TBL_MAX_SIZE)) {
@@ -182,8 +243,13 @@ ITCM_FUNC bool __tbl_activate_commit(tbl_id_t id, const uint8_t *data,
     if (slot == NULL) {
         return false;
     }
+    if (!slot->prepared || (len != slot->desc.size) ||
+        (memcmp(data, slot->staging, len) != 0)) {
+        return false;
+    }
     (void)memcpy(slot->active, data, len);
     slot->active_len = len;
+    slot->prepared   = false;
     return true;
 }
 
@@ -211,6 +277,25 @@ ITCM_FUNC int16_t __tbl_dump(tbl_id_t id, uint8_t *out, uint16_t max) {
 ITCM_FUNC const tbl_descriptor_t *__tbl_get_descriptor(tbl_id_t id) {
     tbl_slot_t *slot = find_slot(id);
     return slot ? &slot->desc : NULL;
+}
+
+ITCM_FUNC bool __tbl_get_info(tbl_id_t id, tbl_info_t *out) {
+    if (out == NULL) {
+        return false;
+    }
+    tbl_slot_t *slot = find_slot(id);
+    if (slot == NULL) {
+        return false;
+    }
+    out->id           = slot->desc.id;
+    (void)memcpy(out->name, slot->desc.name, sizeof(out->name));
+    out->name[TBL_NAME_LEN - 1] = '\0';
+    out->size         = slot->desc.size;
+    out->schema_crc   = slot->desc.schema_crc;
+    out->staged_len   = slot->staged_len;
+    out->staged_valid = slot->staged_valid;
+    out->active_len   = slot->active_len;
+    return true;
 }
 
 ITCM_FUNC uint8_t __tbl_count(void) {

@@ -94,6 +94,9 @@ build/cppcheck_html/
 docs/files/
 docs/files.zip
 
+# Local assistant configuration and notes (per developer, not part of the kernel)
+.claude/
+
 # Dependencies (if using package managers)
 node_modules/
 vendor/

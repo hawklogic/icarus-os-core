@@ -1,8 +1,8 @@
 # Structural Coverage Analysis Report
 
 **Document ID:** ICARUS-VER-001
-**Version:** 0.3
-**Date:** 2026-04-11
+**Version:** 0.4
+**Date:** 2026-09-27
 **Status:** Draft
 **Classification:** Public (Open Source)
 
@@ -19,7 +19,7 @@ This analysis covers host-based unit testing of kernel and BSP sources under `Co
 | Kernel core | `Core/Src/icarus/kernel.c` | Initialization, critical sections, lifecycle |
 | Scheduler | `Core/Src/icarus/scheduler.c` | Preemption and scheduling |
 | Tasks | `Core/Src/icarus/task.c` | Task control blocks, yields, sleep |
-| SVC | `Core/Src/icarus/svc.c` | Supervisor call dispatch (57 numbered services) |
+| SVC | `Core/Src/icarus/svc.c` | Supervisor call dispatch (94 numbered services, IDs 0–93), caller-buffer allowlist, backup SRAM gates, host nested-SVC guard |
 | Semaphores | `Core/Src/icarus/semaphore.c` | Counting semaphores |
 | Pipes | `Core/Src/icarus/pipe.c` | Byte-stream IPC |
 | **CDC RX** | `Core/Src/icarus/cdc_rx.c` | USB CDC receive ring buffer (v0.3.0) |
@@ -27,8 +27,13 @@ This analysis covers host-based unit testing of kernel and BSP sources under `Co
 | **CRC16** | `Core/Src/icarus/crc.c` | CRC16-CCITT helper, HW peripheral on target (v0.3.0) |
 | **Filesystem** | `Core/Src/icarus/fs.c` | Internal flat-file filesystem (v0.3.0) |
 | **Tables** | `Core/Src/icarus/tables.c` | Ground-loadable table engine (v0.3.0) |
+| **Software Bus** | `Core/Src/icarus/sb.c` | Pub/sub router (v0.4.0; host-linked since v0.5.0) |
+| **Checksum monitor** | `Core/Src/icarus/cs.c` | Background CRC16 scan (v0.4.0; host-linked since v0.5.0) |
 | Display BSP | `Core/Src/bsp/display.c` | Terminal / GUI helpers |
-| I/O BSP | `Core/Src/bsp/retarget_stdio.c` | Stdio retarget |
+| I/O BSP | `Core/Src/bsp/retarget_stdio.c` | Console retarget to the CDC transmit ring (partial writes, drop counter; v0.5.0) |
+| **CDC transmit ring** | `Core/Src/bsp/cdc.c` | USB CDC transmit ring, `CDC_Write` (v0.5.0) |
+| Bootloader BSP | `Core/Src/bsp/bootloader.c` | ROM bootloader entry (v0.5.0; host build records the request only) |
+| IWDG / button BSP | `Core/Src/bsp/iwdg.c`, `Core/Src/bsp/button.c` | Watchdog and K1 button (v0.4.0) |
 | HAL BSP | `Core/Src/bsp/retarget_hal.c` | HAL glue for tests |
 | Interrupts | `Core/Src/bsp/stm32h7xx_it.c` | Vector stubs / fault handlers |
 | Error | `Core/Src/bsp/error.c` | `Error_Handler` |
@@ -42,6 +47,15 @@ This analysis covers host-based unit testing of kernel and BSP sources under `Co
 ### 3.1 Summary
 
 Figures below were produced with `cd tests && make COVERAGE=yes clean test coverage-summary` on 2026-04-11 (macOS, Homebrew `lcov`, after excluding mocks, `unity.c`, and `test_task.c` per the project Makefile filters).
+
+> **v0.5.0 note:** the metrics in §3.1 and §3.2 are the v0.3.0 baseline
+> and have not been regenerated for v0.5.0. Since then the suite grew to
+> 274 tests, `sb.c`, `cs.c` and `bootloader.c` were linked into the host
+> build, and `bsp/cdc.c` and `bsp/retarget_stdio.c` were rewritten. The
+> target-only branches added in v0.5.0 (SVC dispatch and per-gate buffer
+> checks, `svc_caller_is_privileged()` on target, the PRIMASK lock in
+> `cdc.c`, `_write()`, the bootloader jump) are listed in
+> `deactivated_code.md`. Regenerate before the next baseline.
 
 | Metric | Achieved | Required (DAL C) | Required (DAL B) | Required (DAL A) |
 |--------|----------|------------------|------------------|------------------|
@@ -105,7 +119,7 @@ Re-run after changes. Example command:
 cd tests && make test
 ```
 
-The suite defines **196** tests as of v0.3.0 (140 in `test_task.c` plus 56 in the per-module aggregator files `test_crc.c`, `test_cdc_rx.c`, `test_event.c`, `test_fs.c`, `test_tables.c`); record pass/fail counts from your baseline run in verification records.
+The suite defines **274** tests as of v0.5.0 (143 in `test_task.c` plus 131 in the per-module aggregator files `test_crc.c`, `test_cdc_rx.c`, `test_event.c`, `test_fs.c`, `test_tables.c`, `test_tables_load.c`, `test_iwdg.c`, `test_button.c`, `test_cdc.c`, `test_stdio.c`, `test_svc_guard.c`, `test_bkpram.c`, `test_svc_policy.c`; per-file counts in `test_traceability.md` §4). `make -C tests` also runs `tools/check_svc_clobbers.py` and `tools/check_svc_pointer_checks.py` before the Unity runner. The v0.3.0 baseline was 196 tests. Record pass/fail counts from your baseline run in verification records.
 
 ## 5. Coverage gap analysis
 
@@ -148,3 +162,4 @@ As documented in `deactivated_code.md`:
 |---------|------|--------|---------|
 | 0.1 | 2025-01-26 | Souham Biswas | Initial draft |
 | 0.2 | 2026-04-01 | Souham Biswas | Paths `Core/Src/icarus/`; refreshed metrics from host `lcov` |
+| 0.4 | 2026-09-27 | Souham Biswas | v0.5.0: scope table adds `sb.c`, `cs.c`, `cdc.c`, `bootloader.c`, `iwdg.c`, `button.c`; SVC count 94; test count 274; metrics flagged as the v0.3.0 baseline pending regeneration |

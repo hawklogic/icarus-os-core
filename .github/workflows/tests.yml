@@ -1,0 +1,37 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  host-tests:
+    name: Host tests (Unity) + SVC asm check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # `make -C tests` runs tools/check_svc_clobbers.py and
+      # tools/check_svc_pointer_checks.py before the suite.
+      - name: Run host tests
+        run: make -C tests
+
+  firmware:
+    name: Firmware build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARM GCC toolchain
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: '14.3.Rel1'
+
+      - name: Build
+        run: make -C build icarus_os.elf

@@ -9,7 +9,7 @@
  * @note    This code runs in ITCM for zero wait-state execution.
  *
  * @see     ARMv7-M Architecture Reference Manual
- * @see     docs/do178c/design/SDD.md Section 5.2 - Context Switch
+ * @see     docs/do178c/design/SDD.md Section 3.3 - Context Switch
  *
  * @author  Souham Biswas
  * @date    2026
@@ -19,6 +19,7 @@
 
 .syntax unified
 .cpu cortex-m7
+.fpu fpv5-d16
 .thumb
 
 /* Place in ITCM for zero wait-state execution */
@@ -48,6 +49,20 @@
  * Called from PendSV_Handler to perform context switch.
  * Saves current task context, selects next ready task, restores its context.
  *
+ * Saved context (below the hardware exception frame, lowest address first):
+ *   r4-r11, EXC_RETURN          9 words, every task
+ *   s16-s31                    16 words, only when EXC_RETURN bit 4 is 0
+ * The hardware frame is the basic 8-word frame, or the extended 26-word
+ * frame (s0-s15, FPSCR, reserved) when the task had used the FPU
+ * (CONTROL.FPCA); EXC_RETURN bit 4 records which.  Each task keeps its own
+ * EXC_RETURN, so the frame type is restored per task, and a cold task
+ * (basic frame built by os_create_task / __os_restart_task) always returns
+ * with 0xFFFFFFFD (thread mode, PSP, basic frame).  Saving s16-s31 is an
+ * FPU instruction, so it also completes any pending lazy stacking of
+ * s0-s15 into the outgoing task's frame; it runs before the MPU is
+ * reprogrammed for the next task.  The basic frame stays at the bottom of
+ * either frame type, so frame[0..7] (R0 ... PC, xPSR) keep their offsets.
+ *
  * Register usage:
  *   r0  - current_task_index address / scratch
  *   r1  - task_list address / next task SP
@@ -69,7 +84,10 @@
 os_yield_pendsv:
     /* Save current task context */
     mrs     r0, psp                     /* Read Process Stack Pointer */
-    stmdb   r0!, {r4-r11}               /* Push R4-R11 to task stack */
+    tst     lr, #0x10                   /* EXC_RETURN bit 4 clear: FP frame */
+    it      eq
+    vstmdbeq r0!, {s16-s31}             /* Push S16-S31 (FP tasks only) */
+    stmdb   r0!, {r4-r11, lr}           /* Push R4-R11 and EXC_RETURN */
     mov     r4, r0                      /* Save updated PSP */
 
     /* Load kernel state pointers */
@@ -140,7 +158,10 @@ yield_postprocess:
     beq     increment_running_count
 
     /* Warm task: restore software-saved registers */
-    ldmia   r1!, {r4-r11}               /* Pop R4-R11 from task stack */
+    ldmia   r1!, {r4-r11, lr}           /* Pop R4-R11 and its EXC_RETURN */
+    tst     lr, #0x10                   /* FP frame? */
+    it      eq
+    vldmiaeq r1!, {s16-s31}             /* Pop S16-S31 (FP tasks only) */
 
 branch_to_next_task:
     msr     psp, r1                     /* Switch to next task's stack */
@@ -174,6 +195,9 @@ increment_running_count:
     ldrb    r6, [r7]
     add     r6, r6, #1
     strb    r6, [r7]
+    /* The cold frame is a basic frame: return to thread mode on PSP with
+     * no FP state, whatever frame type the outgoing task had. */
+    ldr     lr, =0xFFFFFFFD
     b       branch_to_next_task
 
 defer_ctx_switch:

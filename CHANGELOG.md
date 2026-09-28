@@ -3,6 +3,191 @@
 All notable changes to ICARUS OS are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] - 2026-09-27
+
+Robustness release.  Most fixes below were first seen failing on an
+STM32H750 board.  Not every fix has a host test: the SVC caller-buffer
+policy and the USB CDC transmit ring are host-tested (the policy against
+the target memory map); the per-case pointer checks in the SVC dispatcher,
+which is target-only code, are guarded by a static check
+(`tools/check_svc_pointer_checks.py`), as is the SVC asm `"memory"` clobber
+(`tools/check_svc_clobbers.py`); the rest (USB callbacks, startup and
+linker placement, backup SRAM, MPU behaviour) is verified on hardware,
+with two gaps: the bus-resume path is host-tested only (the hardware run
+never suspends the bus), and closing and reopening the port is exercised
+on hardware (the board keeps working across a 30 s close) but the discard
+of the output written while closed is checked only on the host.
+
+### Fixed
+
+- **Task switches lost floating-point state.**  The context switch saved
+  only r4-r11 and returned with the outgoing task's EXC_RETURN, so once a
+  task used the FPU (lazy stacking is on by default) another task could
+  resume with its s0-s31 and FPSCR, or unstack the wrong frame type.  The
+  switch now saves s16-s31 for tasks with an FP frame (which also
+  completes pending lazy stacking before the MPU is reprogrammed), keeps
+  EXC_RETURN per task, and starts cold tasks with 0xFFFFFFFD.  Host tests
+  cannot see this (the context switch is assembly, mocked on the host).
+  Evidence is a target probe: two tasks that fill s0-s31 with their own
+  patterns and check them after being switched out saw about 9,000
+  changed registers in 30 s before the fix and none in 28,000 rounds
+  (120 s) after it.
+- **`semaphore_consume_timeout()` stretched its timeout under load.**  It
+  counted loop iterations of `task_active_sleep(1)`, but each sleep lasts
+  until the waiter is scheduled again, a whole round of the other ready
+  tasks' slices when they are busy: with two CPU-bound tasks a 1000-tick
+  timeout took about 100 s, long enough to trip an application
+  watchdog.  The timeout is now measured on the tick counter (correct
+  across a wrap).  A host-only hook (`__sched_host_set_ticks_per_sleep`)
+  lets tests advance the tick during a sleep.  The unused SVC 58 dispatch
+  case, which ran the wait inside the handler (a nested SVC, HardFault),
+  now returns false.
+- **Console output could stall a task until the watchdog reset.**
+  `CDC_Transmit_FS` read a NULL class handle before the host configured
+  the device and reported BUSY forever, and `__io_putchar` retried with the
+  scheduler locked.  The transmit call now fails while unconfigured.
+- **USB CDC output could corrupt itself or block its caller.**  The stdio
+  line buffers were shared by preemptive tasks without a lock: a task
+  preempted mid-flush let the next printer write past the buffer and hand
+  USB a buffer it was still sending.  `CDC_Write` and `printf` also raced
+  on `CDC_Transmit_FS`'s busy check, and `CDC_Write` retried up to 500 ×
+  `task_active_sleep(1)`, so callers missed deadlines whenever a host held
+  the port open without reading.  All CDC output (`printf` via a strong
+  `_write()`, `__io_putchar`, `CDC_Write`) now goes through one 4 KB
+  transmit ring in privileged DTCM (`bsp/cdc.h`, `CDC_TX_RING_SIZE`).
+  Producers copy in and return — nothing waits, spins or sleeps, from
+  tasks or configurable-priority handlers (not NMI or HardFault, which the
+  ring's PRIMASK lock does not mask).  `CDC_Write` is all-or-nothing and
+  returns false when the ring is full; `printf` keeps what fits and counts
+  the rest (`stdio_get_tx_dropped()`).  The idle-check-and-start of a
+  transfer runs with interrupts masked, bytes stay in the ring until the
+  transfer-complete interrupt releases them, and a USB reset or
+  re-configuration clears the in-flight state so a lost transfer cannot
+  wedge the ring.  Output queued before a host attaches is sent when it
+  opens the port.  Each `_write()` / `stdio_write()` call is atomic, but
+  `printf` itself formats into newlib-nano's shared stdout `FILE` buffer,
+  which nothing locks (the `__retarget_lock_*` hooks are newlib's no-op
+  stubs in this build): concurrent `printf` from preemptive tasks can
+  still interleave or duplicate characters unless the callers serialise,
+  for example inside a critical section.
+- **Output queued while the USB bus was suspended waited for the next
+  write.**  Transfers fail while the device is suspended; the resume
+  callback now restarts the PHY clock that the suspend callback stops,
+  restores the device state and restarts the transmit ring.
+- **Reopening the port replayed old output as if it were live.**  A host
+  that closes the port stops reading, so bytes written while it was closed
+  went out on the next open, possibly minutes later.  On a DTR change the
+  ring now discards the bytes queued behind the transfer in flight, and
+  counts them as dropped: when the host closes the port, and again when it
+  reopens it after an earlier open (`__cdc_tx_on_dtr()`; a lost link counts
+  as a close).  Output queued before the first open since boot is kept and
+  sent when the port opens.  A transfer already in flight at the close
+  cannot be recalled, so up to `CDC_TX_MAX_CHUNK` bytes from before the
+  close can still arrive after the reopen.
+- **SVC handlers dereferenced caller pointers almost unchecked.**  The
+  buffer check only rejected privileged DTCM and backup SRAM, so a task
+  could make the kernel copy, with privilege, into another task's
+  data-pool slot, SRAM4 or the system control space, or fault the handler
+  on read-only or unmapped addresses; `cs_check_all`, `cs_get_region`,
+  `tbl_load`, the pipe byte gates, `fs_*`, `event_drain`, `sb_publish` and
+  others did no check at all.  Every SVC that touches caller memory now
+  validates it against an allowlist for the access it makes
+  (`svc_buffer_allowed()`): writes only to RAM_D1, the application DTCM
+  half, or the caller's own data-pool slot; reads also from internal flash
+  and ITCM.  Names are checked byte by byte up to their maximum length.
+  A rejected pointer returns the call's failure value and touches no
+  memory.  `tools/check_svc_pointer_checks.py` now fails `make -C tests`
+  if a dispatch case uses a caller pointer without a preceding check.
+- **A task could aim an SVC copy at the handler's own return address.**
+  The RAM_D1 allowance covered the main stack at its top: MSP starts at
+  `_estack` and is never moved, so while an SVC runs the handler's frame
+  (saved LR / EXC_RETURN) sits just below it, and a task could
+  `bkpram_write` chosen bytes and `bkpram_read` them over that frame to
+  redirect the privileged return.  For a task caller (exception frame on
+  the process stack) any read or write range that overlaps the main-stack
+  window `[_estack - _Min_Stack_Size, _estack)` is now rejected.  Boot
+  code still running on the main stack may pass its own locals.  The
+  window covers the handler's frame only while the main stack stays within
+  `_Min_Stack_Size` (the never-unwound `main()`/`os_start()` frames plus
+  the handler and nested interrupts); an application whose `main()` keeps
+  large locals must raise it.  The
+  caller is an input of the pure policy (`svc_caller_t`), so the rule is
+  host-tested with the target constants.
+- **SVC inline asm had no `"memory"` clobber** (80 blocks, including
+  `enter_critical`/`exit_critical`).  At -O2 `tbl_activate()` read its
+  out-parameters before the handler's writes were visible, so every table
+  activation failed on target.  `tools/check_svc_clobbers.py` now fails
+  `make -C tests` if any SVC asm block lacks the clobber.
+- **Checksum-monitor callbacks ran inside the SVC handler**; a callback
+  that made a kernel call issued a nested SVC (HardFault).  `cs_check_all()`
+  now collects mismatches in the handler and invokes the callback in thread
+  mode.
+- **Backup data did not survive reset.**  `BKPRAM_DATA` sat in SRAM4
+  behind the write-back D-cache.  It now lives in the 4 KB backup SRAM
+  (0x38800000, `.bkpsram`) mapped by MPU region 8 as privileged,
+  non-cacheable, execute-never; `bkpram_write` is bounds-checked and
+  `bkpram_read()` is new.
+- **Uninitialised RAM at boot:** startup zero-fills `.dtcm_obc`, and the
+  orphan `.ram_d1` input section is placed in `.data`.
+- **Event ring drain** computed the oldest entry wrongly after a wrap.
+- **Tables:** `tbl_load_at()` honours the chunk offset (identical
+  retransmits accepted; gaps, overruns and mixed schema CRCs rejected);
+  `tbl_abort()`; `tbl_get_info()` copy-out for unprivileged callers;
+  commit is accepted only right after a matching prepare.
+- **`crc16_ccitt()` from unprivileged tasks** faulted on the CRC
+  peripheral; it now goes through an SVC with buffer validation.
+- `SVC_PIPE_INIT` truncated the capacity to 8 bits; the SysTick time-slice
+  counter decremented while the scheduler was stopped; K1 was read
+  active-low although PC13 is pulled down (`BSP_KEY_PRESSED_LEVEL`).
+
+### Added
+
+- `sys_enter_bootloader()` (SVC 90): reboot into the ROM USB DFU
+  bootloader, so boards can be re-flashed without BOOT0/RESET.
+- `cdc_rx_dropped()` (SVC 91), `CDC_IsDtrAsserted()`,
+  `os_get_memmanage_fault_count()`.
+- Host-test nested-SVC guard (`SVC_HOST_GATE`): a wrapper called while
+  another wrapper's handler runs aborts the test run.
+- SVC numbers 86–93: `SVC_BKPRAM_READ`, `SVC_TBL_GET_INFO`,
+  `SVC_TBL_ABORT`, `SVC_CRC16_CCITT`, `SVC_SYS_ENTER_BOOTLOADER`,
+  `SVC_CDC_RX_DROPPED`, `SVC_TBL_LOAD_AT`, `SVC_CDC_TX_WRITE`.
+- `cdc_tx_write()` (SVC 93): queue bytes on the USB CDC transmit ring,
+  all-or-nothing or partial; privileged code and handlers call the ring
+  directly.  `stdio_write()`, `svc_caller_is_privileged()`, and the pure
+  `svc_buffer_allowed()` policy (host-tested with the target memory map).
+- Host hooks to simulate a configured/unconfigured device, capture
+  transmitted runs and fire USB transfer completion
+  (`__cdc_host_set_configured`, `__cdc_host_set_auto_complete`,
+  `__cdc_host_complete`, ...).
+- `__cdc_tx_on_dtr()`: port open/close hook that drops output written
+  while the port was closed; `__cdc_tx_discard_queued()` drops the queued
+  bytes that are not in flight.
+- `tools/check_svc_pointer_checks.py` (`make -C tests`, target
+  `check-svc-ptr`): for every `case SVC_...:` of the dispatcher, a caller
+  argument (or a local copied from one) that is cast to a pointer must be
+  checked first by `svc_user_*_ok()`, `svc_buffer_allowed()` or
+  `bkpram_range_ok()` on the same register.  Function pointers are
+  accepted only for the cases on an explicit allowlist (task entry,
+  checksum callback), and stale allowlist entries fail.  Prologue copies
+  of a caller register may be cast or comma-separated; any other prologue
+  read of one fails the check.
+
+### Changed
+
+- The host test suite links and runs again (`cs.c`, `sb.c`,
+  `bootloader.c` were missing and a failing run was masked by `|| true`):
+  274 tests, run after the two static SVC checks.  CI runs it on every
+  push.
+- `svc_buffer_allowed()` takes the caller as a `const svc_caller_t *`
+  (data-pool slot, main-stack window, whether the frame is on the process
+  stack) instead of the slot base and size.
+- `pipe_write_bytes()` / `pipe_read_bytes()` return `bool` (false when the
+  pipe is invalid or the buffer is rejected) and `pipe_enqueue()` /
+  `pipe_dequeue()` pass it on instead of always returning true.
+- Removed `CDC_WRITE_MAX_RETRIES`, `STDIO_LINE_BUF_SIZE`,
+  `STDIO_TX_RETRY_MAX` and `STDIO_TX_RETRY_SPIN` (no retry loops remain).
+- `ICARUS_VERSION_STRING` was stale at 0.2.0; now 0.5.0.
+
 ## [0.4.0] - 2026-06-15
 
 ### Added

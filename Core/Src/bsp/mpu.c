@@ -16,12 +16,13 @@
  *          | 5 | DTCM          | 0x20000000 | 128KB | Priv RW (lower 64K) |
  *          | 6 | RAM_D1        | 0x24000000 | 512KB | Priv+User Full      |
  *          | 7 | Peripherals   | 0x40000000 | 512MB | Priv+User Device    |
+ *          | 8 | Backup SRAM   | 0x38800000 | 4KB   | Priv RW, uncached   |
  *
- *          * Region 3 uses subregion disable (0xFC) to only protect the first
- *            256 bytes (subregions 0-1: 0x000–0x1FF) where kernel handlers
- *            live. Subregions 2-7 (0x200–0x3FF) fall back to region 0
- *            (PRIV_RO_URO) because C library code may read from the linker
- *            padding area in unprivileged mode.
+ *          * Region 5 disables its upper four subregions so region 3 governs
+ *            the upper 64KB of DTCM (unprivileged application data).
+ *          * Region 8 is non-cacheable: a write-back D-cache would hold
+ *            persistent-state writes in cache lines that a reset discards,
+ *            so the data would silently never reach the backup SRAM.
  *
  *          DTCM protection (Step 7b complete): All kernel data reads/writes
  *          use SVC call gates, so unprivileged tasks cannot corrupt kernel
@@ -45,15 +46,16 @@
 /**
  * @brief   Configure Memory Protection Unit regions
  *
- * @details Sets up 8 MPU regions for memory protection:
+ * @details Sets up 9 MPU regions for memory protection:
  *          - Region 0: ITCM (read-only for all, prevents code modification)
  *          - Region 1: QSPI Flash (read-only, cacheable)
  *          - Region 2: Internal Flash (read-only, cacheable)
- *          - Region 3: DISABLED (consolidated with Region 0)
+ *          - Region 3: Upper DTCM (application hot data, full access)
  *          - Region 4: Task Data (dynamic, configured per context switch)
  *          - Region 5: DTCM (privileged-only, protects kernel data)
  *          - Region 6: RAM_D1 (shared buffers, full access)
  *          - Region 7: Peripherals (device memory, full access)
+ *          - Region 8: Backup SRAM (privileged-only, non-cacheable)
  *
  *          Enables MPU with privileged default background map to block
  *          unprivileged access to system control space (NVIC, SCB, etc.)
@@ -177,6 +179,22 @@ void MPU_Config(void)
     r.IsShareable      = MPU_ACCESS_SHAREABLE;
     r.DisableExec      = MPU_INSTRUCTION_ACCESS_DISABLE;
     r.TypeExtField     = MPU_TEX_LEVEL0;
+    r.SubRegionDisable = 0x00;
+    HAL_MPU_ConfigRegion(&r);
+
+    /* ---- Region 8: Backup SRAM 4K — Priv RW, Normal non-cacheable ---- */
+    /* TEX=1 C=0 B=0: writes go straight to the SRAM, so persistent state  */
+    /* survives a reset instead of dying in a dirty D-cache line.          */
+    r.Enable           = MPU_REGION_ENABLE;
+    r.Number           = MPU_REGION_BKPSRAM;
+    r.BaseAddress      = BSP_BKPSRAM_BASE;
+    r.Size             = MPU_REGION_SIZE_4KB;
+    r.AccessPermission = MPU_REGION_PRIV_RW;
+    r.IsBufferable     = MPU_ACCESS_NOT_BUFFERABLE;
+    r.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;
+    r.IsShareable      = MPU_ACCESS_NOT_SHAREABLE;
+    r.DisableExec      = MPU_INSTRUCTION_ACCESS_DISABLE;
+    r.TypeExtField     = MPU_TEX_LEVEL1;
     r.SubRegionDisable = 0x00;
     HAL_MPU_ConfigRegion(&r);
 
