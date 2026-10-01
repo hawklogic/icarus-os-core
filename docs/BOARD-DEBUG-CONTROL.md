@@ -4,6 +4,12 @@ Source owner: `/root/board_debug_suite`, via native-integration-astra. Root gran
 the four existing BSP/SVC files and focused tests in the 2026-10-01 11:20:11 UTC
 coordination exchange. Isolated branch `feature/board-debug-control-v1` starts at
 `9020c73`; do not change the parent OBC gitlink until sequential integration.
+Current publication identity is corporate author and committer
+`souhamb-hawk <souhamb@hawklogicsystems.com>`, as root subsequently required.
+The old `73118a6` head is retained at local branch
+`backup/board-debug-control-pre-corporate-73118a6`. Metadata-only replacement
+`8afd9340bbee6f1d133b3ae9adeea456189f39fa` has identical content and was published
+with an exact lease against `73118a64879c1515bbe96ef3179da4f32563f545`.
 
 The single command definition is `BOARD_FEEDBACK_COMMANDS(X)` in
 `Core/Inc/bsp/board_feedback.h`. It generates the C opcode enum and supplies the
@@ -50,3 +56,17 @@ SVC instruction or physical SPI/PWM. Parent must separately compile the exact
 ARM integration on Icarus once OBC and core pins agree. SVC source/header were
 byte-pinned only in this job. This worker ran no local test/build or actual board
 operation. Root alone reviews, merges and controls the physical board.
+
+Root review 5378796420 found a P2 at the first service call after a wake deadline:
+OFF/SLEEP/BACKLIGHT(0) could complete pending illumination before canceling it.
+The author delta applies darkness intent before display servicing and adds an
+ordered HOST_TEST panel/PWM trace for all three operations, including LED expiry.
+The parent strict HOST_TEST compile/executable passed in 0.0712 seconds. Binding
+`21bda55f6e2cac20cbe8a2691c2007704f8bfa0ba08dbdbdc83684469539f218`, success
+`7bad40cb16e991a2e35afb0c07a4ea6fd61c423d6b991aca84f5aec5732f0956`, independent
+exit `5c3b949e5807b03ae9cc2466249015f38b4b9ae9f86cbfeea28d33af6ffe8823`.
+Source PID 1267992/start 147469170 and observer 1267988/start 147469165 were
+confirmed absent, cgroups gone and units inactive/success 0; 0.375 GiB returned.
+Retained evidence: coordination `board-debug-core-cancel-controls-v1/retained`.
+Previous final-state-only controls did not cover the transient boundary. No
+second independent reviewer or physical board test was started.

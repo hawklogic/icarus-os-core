@@ -2,6 +2,7 @@
 #include "bsp/board_feedback.h"
 #include "icarus/scheduler.h"
 #include "bsp/led.h"
+#include <stddef.h>
 static bool io_failed;
 #ifndef HOST_TEST
 #include "bsp/spi.h"
@@ -117,9 +118,16 @@ static bool display_on, want_on, want_sleep;
 static uint32_t brightness, requested_brightness, phase_start;
 enum { PANEL_AWAKE, PANEL_SLEEP_WAIT, PANEL_ASLEEP, PANEL_WAKE_WAIT };
 static uint32_t phase;
+#ifdef HOST_TEST
+static board_feedback_trace_fn trace_io;
+void board_feedback_host_trace(board_feedback_trace_fn trace) { trace_io = trace; }
+#endif
 
 static void backlight(uint32_t percent) {
     brightness = percent;
+#ifdef HOST_TEST
+    if (trace_io != NULL) { trace_io(BOARD_FEEDBACK_TRACE_BACKLIGHT, percent); }
+#endif
 #ifndef HOST_TEST
     TIM1->CCR2 = percent * 10U;
     if (percent == 0U) {
@@ -142,7 +150,7 @@ static bool panel_command(uint32_t command) {
         return false;
     }
 #else
-    (void)command;
+    if (trace_io != NULL) { trace_io(BOARD_FEEDBACK_TRACE_PANEL, command); }
 #endif
     return true;
 }
@@ -263,6 +271,17 @@ uint32_t __board_feedback_control(uint32_t op, uint32_t value) {
     switch (op) { BOARD_FEEDBACK_COMMANDS(BOARD_FEEDBACK_VALIDATE) default: break; }
 #undef BOARD_FEEDBACK_VALIDATE
     if (!valid) { return state_word(BOARD_FEEDBACK_INVALID); }
+    /* Capture darkness/cancellation intent before the first deadline service.
+     * Otherwise an expired pending ON could enable PWM and only then be undone
+     * by OFF, SLEEP or BACKLIGHT(0), despite an apparently correct final state. */
+    if (op == BOARD_FEEDBACK_OFF || op == BOARD_FEEDBACK_SLEEP ||
+        (op == BOARD_FEEDBACK_BACKLIGHT && value == 0U)) {
+        want_on = false;
+        requested_brightness = 0U;
+        if (op == BOARD_FEEDBACK_OFF) { want_sleep = false; }
+        if (op == BOARD_FEEDBACK_SLEEP && phase == PANEL_WAKE_WAIT) { want_sleep = true; }
+        backlight(0U);
+    }
     (void)__board_feedback_pulse(0U);
     if (!ready) { return state_word(io_failed ? BOARD_FEEDBACK_IO : BOARD_FEEDBACK_NOT_READY); }
     uint32_t result = BOARD_FEEDBACK_OK;
@@ -272,7 +291,6 @@ uint32_t __board_feedback_control(uint32_t op, uint32_t value) {
             break;
         case BOARD_FEEDBACK_OFF:
             want_on = want_sleep = false;
-            backlight(0U);
             if (phase == PANEL_AWAKE && !panel_command(0x28U)) { result = BOARD_FEEDBACK_IO; }
             else { display_on = false; }
             break;
@@ -290,7 +308,6 @@ uint32_t __board_feedback_control(uint32_t op, uint32_t value) {
             break;
         case BOARD_FEEDBACK_SLEEP:
             want_on = false;
-            backlight(0U);
             if (phase == PANEL_WAKE_WAIT) { want_sleep = true; result = BOARD_FEEDBACK_PENDING; break; }
             if (phase == PANEL_AWAKE) {
                 if (!sleep_panel(__os_get_tick_count())) { result = BOARD_FEEDBACK_IO; break; }
@@ -299,7 +316,7 @@ uint32_t __board_feedback_control(uint32_t op, uint32_t value) {
             break;
         case BOARD_FEEDBACK_BACKLIGHT:
             if (value != 0U && (phase != PANEL_AWAKE || !display_on)) { result = BOARD_FEEDBACK_NOT_READY; }
-            else { requested_brightness = value; backlight(value); }
+            else if (value != 0U) { requested_brightness = value; backlight(value); }
             break;
         case BOARD_FEEDBACK_LED:
             (void)__board_feedback_pulse(value);

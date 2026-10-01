@@ -42,6 +42,13 @@ enum {
  * pulse(0) also services pending work. No delay or pointers cross the SVC. */
 uint32_t board_feedback_control(uint32_t op, uint32_t value);
 uint32_t __board_feedback_control(uint32_t op, uint32_t value);
+#ifdef HOST_TEST
+/* Ordered intent trace for narrow no-transient-enable controls; no target code. */
+#define BOARD_FEEDBACK_TRACE_PANEL 1U
+#define BOARD_FEEDBACK_TRACE_BACKLIGHT 2U
+typedef void (*board_feedback_trace_fn)(uint32_t kind, uint32_t value);
+void board_feedback_host_trace(board_feedback_trace_fn trace);
+#endif
 /** Boot-only privileged initialization. Never call from a task or handler. */
 bool board_feedback_init(void);
 /** Bounded scalar-only gate: one 12x16 cell, uppercase ASCII/digits/space. */
