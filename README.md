@@ -1265,5 +1265,8 @@ LCD initialization uses the existing ST7735 panel/register definitions with a
 compact HannStar setup table. Boot reset/sleep waits never run in a gate.
 Runtime SPI polling has a finite iteration budget independent of SysTick,
 and the first transfer failure disables further LCD transfers. A single
-384-byte static glyph buffer keeps pixel storage off task stacks. Software
+384-byte static glyph buffer keeps pixel storage off task stacks. The original
+5x7 glyphs are packed by column and expanded to white 12x16 cells. Initialization
+configures normal display mode only; it enables the already configured TIM1
+complementary PWM backlight directly. Software
 success means a write was issued, not optical confirmation of a connected LCD.
