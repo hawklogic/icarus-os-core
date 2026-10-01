@@ -993,6 +993,9 @@ void SVC_Handler_C(uint32_t *stack_frame) {
         case SVC_BOARD_FEEDBACK_PULSE:
             stack_frame[0] = __board_feedback_pulse(arg0) ? 1U : 0U;
             break;
+        case SVC_BOARD_FEEDBACK_CONTROL:
+            stack_frame[0] = __board_feedback_control(arg0, arg1);
+            break;
         default:
             break;
     }
@@ -2535,5 +2538,19 @@ bool board_feedback_pulse(uint32_t ticks) {
 #else
     SVC_HOST_GATE();
     return __board_feedback_pulse(ticks);
+#endif
+}
+
+uint32_t board_feedback_control(uint32_t op, uint32_t value) {
+#ifndef HOST_TEST
+    if (svc_caller_is_privileged()) { return __board_feedback_control(op, value); }
+    uint32_t result;
+    __asm__ volatile ("mov r0, %1\n" "mov r1, %2\n" "svc %3\n" "mov %0, r0\n"
+        : "=r" (result) : "r" (op), "r" (value), "I" (SVC_BOARD_FEEDBACK_CONTROL)
+        : "r0", "r1", "memory");
+    return result;
+#else
+    SVC_HOST_GATE();
+    return __board_feedback_control(op, value);
 #endif
 }

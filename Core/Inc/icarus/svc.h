@@ -176,7 +176,8 @@ extern "C" {
 /** @brief Highest SVC number in use.  Update when adding a new SVC. */
 #define SVC_BOARD_FEEDBACK_CELL          94  /* bounded text cell, scalar args */
 #define SVC_BOARD_FEEDBACK_PULSE         95  /* timed LED, zero services expiry */
-#define SVC_MAX_NUMBER                  SVC_BOARD_FEEDBACK_PULSE
+#define SVC_BOARD_FEEDBACK_CONTROL       96  /* bounded scalar display/LED control */
+#define SVC_MAX_NUMBER                  SVC_BOARD_FEEDBACK_CONTROL
 
 /* ============================================================================
  * COMPILE-TIME SVC VALIDATION
@@ -190,7 +191,8 @@ _Static_assert((SVC_MAX_NUMBER >= SVC_FS_STATS) &&
                (SVC_MAX_NUMBER >= SVC_CDC_RX_DROPPED) &&
                (SVC_MAX_NUMBER >= SVC_TBL_LOAD_AT) &&
                (SVC_MAX_NUMBER >= SVC_CDC_TX_WRITE) &&
-               (SVC_MAX_NUMBER >= SVC_BOARD_FEEDBACK_PULSE),
+               (SVC_MAX_NUMBER >= SVC_BOARD_FEEDBACK_PULSE) &&
+               (SVC_MAX_NUMBER >= SVC_BOARD_FEEDBACK_CONTROL),
                "SVC_MAX_NUMBER must be >= all other SVC numbers");
 
 /* ============================================================================
