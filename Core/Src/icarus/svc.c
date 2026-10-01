@@ -1,3 +1,4 @@
+#include "bsp/board_feedback.h"
 /**
  * @file    svc.c
  * @brief   ICARUS Supervisor Call (SVC) Implementation
@@ -986,6 +987,12 @@ void SVC_Handler_C(uint32_t *stack_frame) {
             break;
         }
 
+        case SVC_BOARD_FEEDBACK_CELL:
+            stack_frame[0] = __board_feedback_cell(arg0, arg1) ? 1U : 0U;
+            break;
+        case SVC_BOARD_FEEDBACK_PULSE:
+            stack_frame[0] = __board_feedback_pulse(arg0) ? 1U : 0U;
+            break;
         default:
             break;
     }
@@ -2502,3 +2509,31 @@ void __bkpram_host_clear(void) {
     (void)memset(bkpram_host_store, 0, sizeof(bkpram_host_store));
 }
 #endif
+
+
+bool board_feedback_cell(uint32_t cell, uint32_t character) {
+#ifndef HOST_TEST
+    if (svc_caller_is_privileged()) { return __board_feedback_cell(cell, character); }
+    uint32_t result;
+    __asm__ volatile ("mov r0, %1\n" "mov r1, %2\n" "svc %3\n" "mov %0, r0\n"
+        : "=r" (result) : "r" (cell), "r" (character), "I" (SVC_BOARD_FEEDBACK_CELL)
+        : "r0", "r1", "memory");
+    return result != 0U;
+#else
+    SVC_HOST_GATE();
+    return __board_feedback_cell(cell, character);
+#endif
+}
+bool board_feedback_pulse(uint32_t ticks) {
+#ifndef HOST_TEST
+    if (svc_caller_is_privileged()) { return __board_feedback_pulse(ticks); }
+    uint32_t result;
+    __asm__ volatile ("mov r0, %1\n" "svc %2\n" "mov %0, r0\n"
+        : "=r" (result) : "r" (ticks), "I" (SVC_BOARD_FEEDBACK_PULSE)
+        : "r0", "memory");
+    return result != 0U;
+#else
+    SVC_HOST_GATE();
+    return __board_feedback_pulse(ticks);
+#endif
+}

@@ -2287,6 +2287,8 @@ int main(void) {
 	/* BSP additions */
 	run_iwdg_tests();
 	run_cdc_tests();
+	extern void run_board_feedback_tests(void);
+	run_board_feedback_tests();
 	run_button_tests();
 	run_svc_guard_tests();
 	run_stdio_tests();

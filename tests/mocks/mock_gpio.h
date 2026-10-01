@@ -35,6 +35,8 @@ typedef enum {
     GPIO_PIN_SET = 1
 } GPIO_PinState;
 
+extern GPIO_PinState mock_gpio_last_state;
+
 // Functions
 void HAL_GPIO_WritePin(GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin, GPIO_PinState PinState);
 void HAL_GPIO_TogglePin(GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin);

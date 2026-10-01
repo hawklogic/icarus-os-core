@@ -1014,15 +1014,15 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-19" name="line-19"></a><span class="cm">/* USER CODE END Header */</span>
 <a id="line-20" name="line-20"></a>
 <a id="line-21" name="line-21"></a><span class="cm">/* Includes ------------------------------------------------------------------*/</span>
-<a id="line-22" name="line-22"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;stm32h7xx.h&quot;</span>
-<a id="line-23" name="line-23"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;stm32h7xx_hal.h&quot;</span>
-<a id="line-24" name="line-24"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;usbd_def.h&quot;</span>
-<a id="line-25" name="line-25"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;usbd_core.h&quot;</span>
-<a id="line-26" name="line-26"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;usbd_cdc.h&quot;</span>
+<a id="line-22" name="line-22"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"stm32h7xx.h"</span>
+<a id="line-23" name="line-23"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"stm32h7xx_hal.h"</span>
+<a id="line-24" name="line-24"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"usbd_def.h"</span>
+<a id="line-25" name="line-25"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"usbd_core.h"</span>
+<a id="line-26" name="line-26"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"usbd_cdc.h"</span>
 <a id="line-27" name="line-27"></a>
 <a id="line-28" name="line-28"></a><span class="cm">/* USER CODE BEGIN Includes */</span>
 <a id="line-29" name="line-29"></a><span class="cm">/* USB CDC transmit ring: restarted when the bus resumes (see below). */</span>
-<a id="line-30" name="line-30"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;bsp/cdc.h&quot;</span>
+<a id="line-30" name="line-30"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"bsp/cdc.h"</span>
 <a id="line-31" name="line-31"></a><span class="cm">/* USER CODE END Includes */</span>
 <a id="line-32" name="line-32"></a>
 <a id="line-33" name="line-33"></a><span class="cm">/* Private typedef -----------------------------------------------------------*/</span>
@@ -1225,7 +1225,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-230" name="line-230"></a>
 <a id="line-231" name="line-231"></a><span class="cm">/**</span>
 <a id="line-232" name="line-232"></a><span class="cm">  * @brief  Suspend callback.</span>
-<a id="line-233" name="line-233"></a><span class="cm">  * When Low power mode is enabled the debug cannot be used (IAR, Keil doesn&#39;t support it)</span>
+<a id="line-233" name="line-233"></a><span class="cm">  * When Low power mode is enabled the debug cannot be used (IAR, Keil doesn't support it)</span>
 <a id="line-234" name="line-234"></a><span class="cm">  * @param  hpcd: PCD handle</span>
 <a id="line-235" name="line-235"></a><span class="cm">  * @retval None</span>
 <a id="line-236" name="line-236"></a><span class="cm">  */</span>
@@ -1250,7 +1250,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-255" name="line-255"></a>
 <a id="line-256" name="line-256"></a><span class="cm">/**</span>
 <a id="line-257" name="line-257"></a><span class="cm">  * @brief  Resume callback.</span>
-<a id="line-258" name="line-258"></a><span class="cm">  * When Low power mode is enabled the debug cannot be used (IAR, Keil doesn&#39;t support it)</span>
+<a id="line-258" name="line-258"></a><span class="cm">  * When Low power mode is enabled the debug cannot be used (IAR, Keil doesn't support it)</span>
 <a id="line-259" name="line-259"></a><span class="cm">  * @param  hpcd: PCD handle</span>
 <a id="line-260" name="line-260"></a><span class="cm">  * @retval None</span>
 <a id="line-261" name="line-261"></a><span class="cm">  */</span>
