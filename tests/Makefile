@@ -33,6 +33,7 @@ KERNEL_SRC = \
 	$(PROJECT_ROOT)/Core/Src/icarus/cs.c \
 	$(PROJECT_ROOT)/Core/Src/icarus/sb.c
 BSP_SRC = \
+	$(PROJECT_ROOT)/Core/Src/bsp/retained_diag.c \
 	$(PROJECT_ROOT)/Core/Src/bsp/board_feedback.c \
 	$(PROJECT_ROOT)/Core/Src/bsp/error.c \
 	$(PROJECT_ROOT)/Core/Src/bsp/retarget_stdio.c \

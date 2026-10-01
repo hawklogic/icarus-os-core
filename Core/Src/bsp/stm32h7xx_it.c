@@ -26,6 +26,7 @@
 #include <stdbool.h>
 #include "icarus/config.h"
 #include "icarus/svc.h"
+#include "bsp/retained_diag.h"
 #ifndef HOST_TEST
 #include "st7735.h"
 #include "lcd.h"
@@ -66,6 +67,48 @@
 
 /* USER CODE END 0 */
 
+#ifndef HOST_TEST
+void retained_diag_terminal_entry(uint32_t raw_msp, uint32_t raw_psp,
+                                  uint32_t exc_return, uint32_t kind)
+    __attribute__((naked, noreturn));
+void retained_diag_memmanage_recoverable(uint32_t raw_msp,
+                                         uint32_t raw_psp,
+                                         uint32_t exc_return,
+                                         uint32_t cfsr);
+/* Separate from every task stack. ARM stack budget must be checked from the
+ * final writer .su/call graph before target use. The first nested trap spins
+ * without touching this stack again. */
+#define RETAINED_DIAG_EMERGENCY_BYTES 1024u
+__attribute__((used, aligned(8))) uint32_t
+    retained_diag_emergency_stack[RETAINED_DIAG_EMERGENCY_BYTES / 4u];
+volatile uint32_t retained_diag_trap_active;
+
+/* r0/r1/r2 already contain raw MSP/PSP/EXC_RETURN, r3 the fault kind.
+ * No compiler prologue, stack access, SVC, HAL, FP or watchdog operation. */
+__attribute__((naked, noreturn)) void retained_diag_terminal_entry(
+    uint32_t raw_msp __attribute__((unused)),
+    uint32_t raw_psp __attribute__((unused)),
+    uint32_t exc_return __attribute__((unused)),
+    uint32_t kind __attribute__((unused)))
+{
+  __asm__ volatile (
+    "ldr r12, =retained_diag_trap_active\n"
+    "movs r4, #1\n"
+    "2: ldrex r5, [r12]\n"
+    "cmp r5, #0\n"
+    "bne 1f\n"
+    "strex r5, r4, [r12]\n"
+    "cmp r5, #0\n"
+    "bne 2b\n"
+    "dmb\n"
+    "ldr r12, =retained_diag_emergency_stack + 1024\n"
+    "msr msp, r12\n"
+    "bl retained_diag_capture_terminal\n"
+    "1: b 1b\n"
+  );
+}
+#endif
+
 /* External variables --------------------------------------------------------*/
 extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
 /* USER CODE BEGIN EV */
@@ -94,44 +137,15 @@ void NMI_Handler(void)
   * @brief This function handles Hard fault interrupt.
   */
 #ifndef HOST_TEST
-void HardFault_Handler(void)
+__attribute__((naked, noreturn)) void HardFault_Handler(void)
 {
-  /* Capture fault info from SCB */
-  volatile uint32_t cfsr  = SCB->CFSR;
-  volatile uint32_t hfsr  = SCB->HFSR;
-  volatile uint32_t mmfar = SCB->MMFAR;
-  volatile uint32_t bfar  = SCB->BFAR;
-  (void)cfsr; (void)hfsr; (void)mmfar; (void)bfar;
-
-  /* Extract stacked PC via PSP or MSP */
-  uint32_t *sp;
-  __asm__ volatile ("tst lr, #4\n"
-                    "ite eq\n"
-                    "mrseq %0, msp\n"
-                    "mrsne %0, psp\n"
-                    : "=r" (sp));
-  volatile uint32_t stacked_r0  = sp[0];
-  volatile uint32_t stacked_r1  = sp[1];
-  volatile uint32_t stacked_r2  = sp[2];
-  volatile uint32_t stacked_r3  = sp[3];
-  volatile uint32_t stacked_r12 = sp[4];
-  volatile uint32_t stacked_lr  = sp[5];
-  volatile uint32_t stacked_pc  = sp[6];
-  volatile uint32_t stacked_psr = sp[7];
-  (void)stacked_r0; (void)stacked_r1; (void)stacked_r2; (void)stacked_r3;
-  (void)stacked_r12; (void)stacked_lr; (void)stacked_pc; (void)stacked_psr;
-
-  /* Fast LED blink = HardFault (3 fast blinks, pause, repeat) */
-  while (1)
-  {
-    for (int i = 0; i < 3; i++) {
-      HAL_GPIO_WritePin(E3_GPIO_Port, E3_Pin, GPIO_PIN_SET);
-      for (volatile int d = 0; d < 16000000; d++) {}
-      HAL_GPIO_WritePin(E3_GPIO_Port, E3_Pin, GPIO_PIN_RESET);
-      for (volatile int d = 0; d < 16000000; d++) {}
-    }
-    for (volatile int d = 0; d < 160000000; d++) {}
-  }
+  __asm__ volatile (
+    "mrs r0, msp\n"
+    "mrs r1, psp\n"
+    "mov r2, lr\n"
+    "movs r3, #1\n"
+    "b retained_diag_terminal_entry\n"
+  );
 }
 #else
 void HardFault_Handler(void) { while (1) {} }
@@ -165,73 +179,54 @@ uint32_t os_get_memmanage_fault_count(void)
   *          The task can then check g_memmanage_fault_count to detect it.
   *
   *          If the fault is not recoverable (instruction fetch, or from MSP),
-  *          fall through to the 4-blink halt.
+  *          enter the terminal retained capture and halt.
   */
 #ifndef HOST_TEST
-void MemManage_Handler(void)
+/* Branch from the naked veneer with original EXC_RETURN still in LR. Only
+ * the pre-existing DACCVIOL/!IACCVIOL/PSP case reaches this function. */
+__attribute__((used, noinline)) void retained_diag_memmanage_recoverable(
+    uint32_t raw_msp, uint32_t raw_psp, uint32_t exc_return,
+    uint32_t cfsr)
 {
-  uint32_t cfsr  = SCB->CFSR;
-
-  /* MemManage fault types:
-   * DACCVIOL (bit 1) = data access violation (read or write)
-   * IACCVIOL (bit 0) = instruction fetch violation — not recoverable here
-   * MMARVALID (bit 7) = MMFAR holds valid fault address */
-  bool is_daccviol = (cfsr & SCB_CFSR_DACCVIOL_Msk) != 0;
-  bool is_iaccviol = (cfsr & SCB_CFSR_IACCVIOL_Msk) != 0;
-
-  /* Check if fault came from thread mode (PSP) vs kernel (MSP) */
-  uint32_t lr_val;
-  __asm__ volatile ("mov %0, lr" : "=r" (lr_val));
-  bool from_psp = (lr_val & 0x4) != 0;
-
-  /* Recover from data access violations (read or write) from unprivileged tasks */
-  if (is_daccviol && !is_iaccviol && from_psp) {
-    /* Recoverable: advance stacked PC past the faulting Thumb instruction */
-    uint32_t *sp;
-    __asm__ volatile ("mrs %0, psp" : "=r" (sp));
-    
-    /* Capture fault address for debugging */
-    if (cfsr & SCB_CFSR_MMARVALID_Msk) {
-      g_last_fault_addr = SCB->MMFAR;
-    } else {
-      g_last_fault_addr = 0xFFFFFFFF;  /* Invalid */
-    }
-    g_last_fault_pc = sp[6];
-    
-    /* Determine instruction length: Thumb-2 (32-bit) vs Thumb (16-bit)
-     * Thumb-2 instructions have bits [15:11] >= 0b11101 (0x1D)
-     * See ARMv7-M Architecture Reference Manual A6.3 */
-    uint16_t *pc_ptr = (uint16_t *)sp[6];
-    uint16_t instr = *pc_ptr;
-    uint8_t instr_len = ((instr & 0xF800) >= 0xE800) ? 4 : 2;
-    
-    sp[6] += instr_len;  /* stacked PC is at offset 6 in the exception frame */
-
-    /* Clear the fault status bits so we can return cleanly */
-    SCB->CFSR = cfsr;
-
+  if (retained_diag_memmanage_should_terminate(g_memmanage_fault_count)) {
     g_memmanage_fault_count++;
-    
-    /* Halt after more than 30 recovered faults since boot */
-    if (g_memmanage_fault_count > 30) {
-      /* Fault info captured in g_last_fault_addr and g_last_fault_pc */
-      /* Fall through to halt with 4 blinks */
-    } else {
-      return;
-    }
+    retained_diag_terminal_entry(raw_msp, raw_psp, exc_return,
+                                 RETAINED_DIAG_KIND_MEMORY);
   }
+  uint32_t *sp = (uint32_t *)(uintptr_t)raw_psp;
+  if ((cfsr & SCB_CFSR_MMARVALID_Msk) != 0u) {
+    g_last_fault_addr = SCB->MMFAR;
+  } else {
+    g_last_fault_addr = 0xFFFFFFFFu;
+  }
+  g_last_fault_pc = sp[6];
+  /* Preserve the existing Thumb instruction-skip and fault-count behavior. */
+  uint16_t instr = *(const uint16_t *)(uintptr_t)sp[6];
+  uint8_t instr_len = ((instr & 0xF800u) >= 0xE800u) ? 4u : 2u;
+  sp[6] += instr_len;
+  SCB->CFSR = cfsr;
+  g_memmanage_fault_count++;
+}
 
-  /* Non-recoverable: 4 fast blinks = MemManage */
-  while (1)
-  {
-    for (int i = 0; i < 4; i++) {
-      HAL_GPIO_WritePin(E3_GPIO_Port, E3_Pin, GPIO_PIN_SET);
-      for (volatile int d = 0; d < 16000000; d++) {}
-      HAL_GPIO_WritePin(E3_GPIO_Port, E3_Pin, GPIO_PIN_RESET);
-      for (volatile int d = 0; d < 16000000; d++) {}
-    }
-    for (volatile int d = 0; d < 160000000; d++) {}
-  }
+__attribute__((naked)) void MemManage_Handler(void)
+{
+  __asm__ volatile (
+    "mrs r0, msp\n"
+    "mrs r1, psp\n"
+    "mov r2, lr\n"
+    "ldr r12, =0xE000ED28\n" /* SCB->CFSR */
+    "ldr r12, [r12]\n"
+    "tst r12, #2\n"         /* DACCVIOL */
+    "beq 1f\n"
+    "tst r12, #1\n"         /* IACCVIOL */
+    "bne 1f\n"
+    "tst r2, #4\n"          /* PSP, as in original handler */
+    "beq 1f\n"
+    "mov r3, r12\n"         /* Preserve the status read used for recovery */
+    "b retained_diag_memmanage_recoverable\n"
+    "1: movs r3, #2\n"
+    "b retained_diag_terminal_entry\n"
+  );
 }
 #else
 void MemManage_Handler(void) { while (1) {} }
@@ -241,23 +236,15 @@ void MemManage_Handler(void) { while (1) {} }
   * @brief This function handles Pre-fetch fault, memory access fault.
   */
 #ifndef HOST_TEST
-void BusFault_Handler(void)
+__attribute__((naked, noreturn)) void BusFault_Handler(void)
 {
-  volatile uint32_t cfsr = SCB->CFSR;
-  volatile uint32_t bfar = SCB->BFAR;
-  (void)cfsr; (void)bfar;
-
-  /* 5 fast blinks = BusFault */
-  while (1)
-  {
-    for (int i = 0; i < 5; i++) {
-      HAL_GPIO_WritePin(E3_GPIO_Port, E3_Pin, GPIO_PIN_SET);
-      for (volatile int d = 0; d < 16000000; d++) {}
-      HAL_GPIO_WritePin(E3_GPIO_Port, E3_Pin, GPIO_PIN_RESET);
-      for (volatile int d = 0; d < 16000000; d++) {}
-    }
-    for (volatile int d = 0; d < 160000000; d++) {}
-  }
+  __asm__ volatile (
+    "mrs r0, msp\n"
+    "mrs r1, psp\n"
+    "mov r2, lr\n"
+    "movs r3, #3\n"
+    "b retained_diag_terminal_entry\n"
+  );
 }
 #else
 void BusFault_Handler(void) { while (1) {} }
@@ -267,22 +254,15 @@ void BusFault_Handler(void) { while (1) {} }
   * @brief This function handles Undefined instruction or illegal state.
   */
 #ifndef HOST_TEST
-void UsageFault_Handler(void)
+__attribute__((naked, noreturn)) void UsageFault_Handler(void)
 {
-  volatile uint32_t cfsr = SCB->CFSR;
-  (void)cfsr;
-
-  /* 6 fast blinks = UsageFault */
-  while (1)
-  {
-    for (int i = 0; i < 6; i++) {
-      HAL_GPIO_WritePin(E3_GPIO_Port, E3_Pin, GPIO_PIN_SET);
-      for (volatile int d = 0; d < 16000000; d++) {}
-      HAL_GPIO_WritePin(E3_GPIO_Port, E3_Pin, GPIO_PIN_RESET);
-      for (volatile int d = 0; d < 16000000; d++) {}
-    }
-    for (volatile int d = 0; d < 160000000; d++) {}
-  }
+  __asm__ volatile (
+    "mrs r0, msp\n"
+    "mrs r1, psp\n"
+    "mov r2, lr\n"
+    "movs r3, #4\n"
+    "b retained_diag_terminal_entry\n"
+  );
 }
 #else
 void UsageFault_Handler(void) { while (1) {} }

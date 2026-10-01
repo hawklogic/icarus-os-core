@@ -6,6 +6,8 @@
 
 # Project name
 PROJECT = icarus_os
+.DEFAULT_GOAL := all
+BUILD_MAKEFILE := $(firstword $(MAKEFILE_LIST))
 
 # Toolchain
 PREFIX = arm-none-eabi-
@@ -107,6 +109,10 @@ TEST ?= no
 
 # Compiler flags
 MCU = -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
+# Generate C accesses safe for a target that traps unaligned words/halfwords.
+# This reaches application and vendor C; prebuilt libraries remain separate.
+# Keep the option off assembler recipes while passing it to the link driver.
+override ARM_CFLAGS := -mno-unaligned-access
 
 # Enhanced warning flags for safety-critical code (DO-178C preparation)
 # -Wall: Enable all standard warnings
@@ -277,6 +283,40 @@ CPPCHECK_FLAGS = --enable=all \
 	--force \
 	$(INCLUDES)
 
+# A retained object can predate the current compiler options. Compare the
+# effective C and link commands on each invocation, but change stamp mtimes
+# only when their contents change so an unchanged incremental build is idle.
+# The quote helper keeps option text inert while writing the signatures.
+shell_quote = '$(subst ','"'"',$(1))'
+C_COMMAND_STAMP = $(OBJ_DIR)/.c-command
+LINK_COMMAND_STAMP = $(OBJ_DIR)/.link-command
+
+# GNU Make 3.x can treat changed outputs as equally dated within one second.
+# Rebuild C objects, relink, and refresh derived images on those versions so a
+# flag change cannot leave old code in an incremental image. Newer Make keeps
+# the content-stable stamp path and its unchanged-command no-op.
+ifneq ($(filter 3.%,$(MAKE_VERSION)),)
+LEGACY_C_LINK_FORCE := FORCE_LEGACY_C_LINK
+.PHONY: FORCE_LEGACY_C_LINK
+FORCE_LEGACY_C_LINK:
+endif
+
+.PHONY: FORCE_BUILD_FLAGS
+FORCE_BUILD_FLAGS:
+
+$(C_COMMAND_STAMP): FORCE_BUILD_FLAGS | $(OBJ_DIR)
+	@set -e; tmp="$@.tmp.$$$$"; \
+	 trap 'rm -f "$$tmp"' 0 HUP INT TERM; \
+	 { printf '%s\n' $(call shell_quote,$(CC) $(CFLAGS) $(ARM_CFLAGS)); \
+	   printf '%s\n' $(call shell_quote,$(CC) $(VENDOR_CFLAGS) $(ARM_CFLAGS)); } > "$$tmp"; \
+	 if ! cmp -s "$$tmp" "$@"; then mv "$$tmp" "$@"; fi
+
+$(LINK_COMMAND_STAMP): FORCE_BUILD_FLAGS | $(OBJ_DIR)
+	@set -e; tmp="$@.tmp.$$$$"; \
+	 trap 'rm -f "$$tmp"' 0 HUP INT TERM; \
+	 printf '%s\n' $(call shell_quote,$(LD) $(ALL_OBJECTS) $(LDFLAGS) $(ARM_CFLAGS) -o $(ELF_FILE)) > "$$tmp"; \
+	 if ! cmp -s "$$tmp" "$@"; then mv "$$tmp" "$@"; fi
+
 # Default target - build, analyze, test, and generate reports
 all: $(ELF_FILE) $(HEX_FILE) $(BIN_FILE) size cppcheck cppcheck-html test-reports
 
@@ -307,7 +347,7 @@ $(DEP_DIR):
 
 # Link ELF file
 # Prevent coverage builds for embedded target (code too large)
-$(ELF_FILE): $(ALL_OBJECTS) | $(BUILD_DIR)
+$(ELF_FILE): $(ALL_OBJECTS) $(LINK_COMMAND_STAMP) $(BUILD_MAKEFILE) $(LEGACY_C_LINK_FORCE) | $(BUILD_DIR)
 	@if [ "$(COVERAGE)" = "yes" ] && [ "$(TEST)" != "yes" ]; then \
 		echo "ERROR: Coverage cannot be used for embedded target builds."; \
 		echo "Coverage instrumentation makes code too large for flash."; \
@@ -320,18 +360,18 @@ $(ELF_FILE): $(ALL_OBJECTS) | $(BUILD_DIR)
 		exit 1; \
 	fi
 	@echo "Linking $@"
-	@$(LD) $(ALL_OBJECTS) $(LDFLAGS) -o $@
+	@$(LD) $(ALL_OBJECTS) $(LDFLAGS) $(ARM_CFLAGS) -o $@
 	@echo "Build complete: $@"
 
 # Compile C sources - use VENDOR_CFLAGS for vendor code, CFLAGS for application code
-$(OBJ_DIR)/%.o: $(PROJECT_ROOT)/%.c | $(OBJ_DIR) $(DEP_DIR)
+$(OBJ_DIR)/%.o: $(PROJECT_ROOT)/%.c $(C_COMMAND_STAMP) $(BUILD_MAKEFILE) $(LEGACY_C_LINK_FORCE) | $(OBJ_DIR) $(DEP_DIR)
 	@echo "Compiling $<"
 	@mkdir -p $(dir $@)
 	@mkdir -p $(dir $(@:$(OBJ_DIR)/%.o=$(DEP_DIR)/%.d))
 	@if echo "$<" | grep -qE "(Drivers/|Middlewares/|USB_DEVICE/|lsm9ds1_reg\.c)"; then \
-		$(CC) $(VENDOR_CFLAGS) -c $< -o $@; \
+		$(CC) $(VENDOR_CFLAGS) $(ARM_CFLAGS) -c $< -o $@; \
 	else \
-		$(CC) $(CFLAGS) -c $< -o $@; \
+		$(CC) $(CFLAGS) $(ARM_CFLAGS) -c $< -o $@; \
 	fi
 
 # Assemble ASM sources
@@ -342,17 +382,17 @@ $(OBJ_DIR)/%.o: $(PROJECT_ROOT)/%.s | $(OBJ_DIR) $(DEP_DIR)
 	@$(AS) $(ASFLAGS) -c $< -o $@
 
 # Generate HEX file
-$(HEX_FILE): $(ELF_FILE)
+$(HEX_FILE): $(ELF_FILE) $(LEGACY_C_LINK_FORCE)
 	@echo "Creating $@"
 	@$(OBJCOPY) -O ihex $< $@
 
 # Generate BIN file
-$(BIN_FILE): $(ELF_FILE)
+$(BIN_FILE): $(ELF_FILE) $(LEGACY_C_LINK_FORCE)
 	@echo "Creating $@"
 	@$(OBJCOPY) -O binary $< $@
 
 # Generate list file
-$(LIST_FILE): $(ELF_FILE)
+$(LIST_FILE): $(ELF_FILE) $(LEGACY_C_LINK_FORCE)
 	@echo "Creating $@"
 	@$(OBJDUMP) -h -S $< > $@
 
