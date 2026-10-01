@@ -107,6 +107,10 @@ TEST ?= no
 
 # Compiler flags
 MCU = -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
+# Generate C accesses safe for a target that traps unaligned words/halfwords.
+# This reaches application and vendor C; prebuilt libraries remain separate.
+# Keep the option off assembler recipes while passing it to the link driver.
+ARM_CFLAGS = -mno-unaligned-access
 
 # Enhanced warning flags for safety-critical code (DO-178C preparation)
 # -Wall: Enable all standard warnings
@@ -165,7 +169,7 @@ endif
 
 # Base CFLAGS for application code
 # Using -isystem for vendor includes suppresses warnings from vendor headers
-CFLAGS = $(MCU) \
+CFLAGS = $(MCU) $(ARM_CFLAGS) \
 	$(COVERAGE_OPT) \
 	$(WARNING_FLAGS) \
 	$(COVERAGE_CFLAGS) \
@@ -181,7 +185,7 @@ CFLAGS = $(MCU) \
 	-DUSBD_USER_REGISTER_CALLBACK=0
 
 # CFLAGS for vendor code (suppress some warnings)
-VENDOR_CFLAGS = $(MCU) \
+VENDOR_CFLAGS = $(MCU) $(ARM_CFLAGS) \
 	$(COVERAGE_OPT) \
 	-Wall \
 	-Wextra \
@@ -213,7 +217,7 @@ ASFLAGS = $(MCU) \
 	-DSTM32H750xx
 
 # Linker flags
-LDFLAGS = $(MCU) \
+LDFLAGS = $(MCU) $(ARM_CFLAGS) \
 	-specs=nosys.specs \
 	-specs=nano.specs \
 	-T$(LINKER_SCRIPT) \
