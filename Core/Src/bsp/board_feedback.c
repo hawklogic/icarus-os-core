@@ -2,13 +2,13 @@
 #include "bsp/board_feedback.h"
 #include "icarus/scheduler.h"
 #include "bsp/led.h"
+static bool io_failed;
 #ifndef HOST_TEST
 #include "bsp/spi.h"
 #include "bsp/timer.h"
 #include "bsp/config.h"
 #include "st7735.h"
 
-static bool io_failed;
 /* One glyph, never a screen framebuffer or a task-stack allocation. */
 static uint16_t pixels[12U * 16U];
 
@@ -59,7 +59,7 @@ static const uint8_t setup[] = {
     0x21,0, 0x3A,1,5,
     0xE0,16,2,0x1C,7,0x12,0x37,0x32,0x29,0x2D,0x29,0x25,0x2B,0x39,0,1,3,0x10,
     0xE1,16,3,0x1D,7,6,0x2E,0x2C,0x29,0x2D,0x2E,0x2E,0x37,0x3F,0,0,2,0x10,
-    0x36,1,0xA8, 0x13,0, 0x29,0
+    0x36,1,0xA8, 0x13,0, 0x28,0
 };
 static bool rectangle(uint32_t x, uint32_t y, uint32_t width, uint32_t height) {
     /* Landscape rotated 180, HannStar controller RAM offsets. */
@@ -113,13 +113,89 @@ static const uint8_t font[36][5] = {
 
 static bool ready;
 static uint32_t pulse_start, pulse_ticks;
+static bool display_on, want_on, want_sleep;
+static uint32_t brightness, requested_brightness, phase_start;
+enum { PANEL_AWAKE, PANEL_SLEEP_WAIT, PANEL_ASLEEP, PANEL_WAKE_WAIT };
+static uint32_t phase;
+
+static void backlight(uint32_t percent) {
+    brightness = percent;
+#ifndef HOST_TEST
+    TIM1->CCR2 = percent * 10U;
+    if (percent == 0U) {
+        TIM1->CCER &= ~TIM_CCER_CC2NE;
+        TIM1->BDTR &= ~TIM_BDTR_MOE;
+        TIM1->CR1 &= ~TIM_CR1_CEN;
+    } else {
+        TIM1->CCER |= TIM_CCER_CC2NE;
+        TIM1->BDTR |= TIM_BDTR_MOE;
+        TIM1->CR1 |= TIM_CR1_CEN;
+    }
+#endif
+}
+
+static bool panel_command(uint32_t command) {
+#ifndef HOST_TEST
+    if (write_reg(command, NULL, 0U) != ST7735_OK) {
+        ready = false;
+        backlight(0U);
+        return false;
+    }
+#else
+    (void)command;
+#endif
+    return true;
+}
+
+static bool sleep_panel(uint32_t now) {
+    if (!panel_command(0x28U)) { return false; }
+    display_on = false;
+    if (!panel_command(0x10U)) { return false; }
+    phase = PANEL_SLEEP_WAIT;
+    phase_start = now;
+    want_sleep = false;
+    return true;
+}
+
+static void service_display(uint32_t now) {
+    if (!ready) { return; }
+    if (phase == PANEL_SLEEP_WAIT && now - phase_start >= 120U) {
+        phase = PANEL_ASLEEP;
+    }
+    if (phase == PANEL_WAKE_WAIT && now - phase_start >= 120U) {
+        phase = PANEL_AWAKE;
+        if (want_sleep) { (void)sleep_panel(now); }
+        else if (want_on && panel_command(0x29U)) {
+            display_on = true;
+            backlight(requested_brightness);
+        }
+    }
+    if (phase == PANEL_ASLEEP && want_on && panel_command(0x11U)) {
+        phase = PANEL_WAKE_WAIT;
+        phase_start = now;
+    }
+}
+
+static uint32_t state_word(uint32_t result) {
+    return result | (brightness << 8U) |
+           (ready ? BOARD_FEEDBACK_READY : 0U) |
+           (display_on ? BOARD_FEEDBACK_ON_FLAG : 0U) |
+           ((phase == PANEL_ASLEEP || phase == PANEL_SLEEP_WAIT) ? BOARD_FEEDBACK_ASLEEP : 0U) |
+           ((phase == PANEL_WAKE_WAIT || (phase == PANEL_SLEEP_WAIT && want_on)) ? BOARD_FEEDBACK_WAKE_PENDING : 0U) |
+           (io_failed ? BOARD_FEEDBACK_IO_FAILED : 0U) |
+           (pulse_ticks != 0U ? BOARD_FEEDBACK_LED_ACTIVE : 0U);
+}
 
 bool board_feedback_init(void) {
     ready = false;
     pulse_ticks = 0U;
+    io_failed = false;
+    phase = PANEL_AWAKE;
+    display_on = want_on = want_sleep = false;
+    requested_brightness = 0U;
+    backlight(0U);
     LED_Off();
 #ifndef HOST_TEST
-    io_failed = false;
     if (write_reg(ST7735_SW_RESET, NULL, 0U) != ST7735_OK) { return false; }
     HAL_Delay(120U);
     if (write_reg(ST7735_SLEEP_OUT, NULL, 0U) != ST7735_OK) { return false; }
@@ -134,12 +210,7 @@ bool board_feedback_init(void) {
     for (unsigned row = 0U; row < 80U; row++) {
         if (send_data(pixels, 320U) != ST7735_OK) { return false; }
     }
-    /* MX_TIM1_Init already configured channel 2 in PWM mode, non-slave.
-     * This interface exclusively owns its complementary backlight output. */
-    TIM1->CCR2 = 100U;
-    TIM1->CCER |= TIM_CCER_CC2NE;
-    TIM1->BDTR |= TIM_BDTR_MOE;
-    TIM1->CR1 |= TIM_CR1_CEN;
+    /* Panel scan and PWM stay off until explicit runtime ON. */
 #endif
     ready = true;
     return true;
@@ -148,7 +219,8 @@ bool board_feedback_init(void) {
 bool __board_feedback_cell(uint32_t cell, uint32_t character) {
     bool digit = character >= '0' && character <= '9';
     bool letter = character >= 'A' && character <= 'Z';
-    if (!ready || cell >= BOARD_FEEDBACK_CELLS || (!digit && !letter && character != ' ')) { return false; }
+    if (!ready || phase != PANEL_AWAKE || cell >= BOARD_FEEDBACK_CELLS ||
+        (!digit && !letter && character != ' ')) { return false; }
 #ifndef HOST_TEST
     uint32_t index = digit ? character - '0' : character - 'A' + 10U;
     for (uint32_t y = 0U; y < 16U; y++) {
@@ -162,6 +234,7 @@ bool __board_feedback_cell(uint32_t cell, uint32_t character) {
                    (cell / BOARD_FEEDBACK_COLUMNS) * 16U, 12U, 16U) ||
         send_data(pixels, sizeof(pixels)) != ST7735_OK) {
         ready = false;
+        backlight(0U);
         return false;
     }
 #endif
@@ -171,6 +244,7 @@ bool __board_feedback_cell(uint32_t cell, uint32_t character) {
 bool __board_feedback_pulse(uint32_t ticks) {
     if (ticks > 1000U) { return false; }
     uint32_t now = __os_get_tick_count();
+    service_display(now);
     if (ticks != 0U) {
         pulse_start = now;
         pulse_ticks = ticks;
@@ -180,4 +254,57 @@ bool __board_feedback_pulse(uint32_t ticks) {
         LED_Off();
     }
     return true;
+}
+
+uint32_t __board_feedback_control(uint32_t op, uint32_t value) {
+    bool valid = false;
+#define BOARD_FEEDBACK_VALIDATE(symbol, opcode, name, minimum, maximum, description) \
+    case opcode: valid = value - (uint32_t)(minimum) <= (uint32_t)((maximum) - (minimum)); break;
+    switch (op) { BOARD_FEEDBACK_COMMANDS(BOARD_FEEDBACK_VALIDATE) default: break; }
+#undef BOARD_FEEDBACK_VALIDATE
+    if (!valid) { return state_word(BOARD_FEEDBACK_INVALID); }
+    (void)__board_feedback_pulse(0U);
+    if (!ready) { return state_word(io_failed ? BOARD_FEEDBACK_IO : BOARD_FEEDBACK_NOT_READY); }
+    uint32_t result = BOARD_FEEDBACK_OK;
+    switch (op) {
+        case BOARD_FEEDBACK_STATUS:
+            if (phase == PANEL_SLEEP_WAIT || phase == PANEL_WAKE_WAIT) { result = BOARD_FEEDBACK_PENDING; }
+            break;
+        case BOARD_FEEDBACK_OFF:
+            want_on = want_sleep = false;
+            backlight(0U);
+            if (phase == PANEL_AWAKE && !panel_command(0x28U)) { result = BOARD_FEEDBACK_IO; }
+            else { display_on = false; }
+            break;
+        case BOARD_FEEDBACK_ON:
+            requested_brightness = value;
+            want_on = true;
+            want_sleep = false;
+            if (phase == PANEL_AWAKE) {
+                if (panel_command(0x29U)) { display_on = true; backlight(value); }
+                else { result = BOARD_FEEDBACK_IO; }
+            } else {
+                service_display(__os_get_tick_count());
+                result = ready ? BOARD_FEEDBACK_PENDING : BOARD_FEEDBACK_IO;
+            }
+            break;
+        case BOARD_FEEDBACK_SLEEP:
+            want_on = false;
+            backlight(0U);
+            if (phase == PANEL_WAKE_WAIT) { want_sleep = true; result = BOARD_FEEDBACK_PENDING; break; }
+            if (phase == PANEL_AWAKE) {
+                if (!sleep_panel(__os_get_tick_count())) { result = BOARD_FEEDBACK_IO; break; }
+            }
+            if (phase == PANEL_SLEEP_WAIT) { result = BOARD_FEEDBACK_PENDING; }
+            break;
+        case BOARD_FEEDBACK_BACKLIGHT:
+            if (value != 0U && (phase != PANEL_AWAKE || !display_on)) { result = BOARD_FEEDBACK_NOT_READY; }
+            else { requested_brightness = value; backlight(value); }
+            break;
+        case BOARD_FEEDBACK_LED:
+            (void)__board_feedback_pulse(value);
+            break;
+        default: result = BOARD_FEEDBACK_INVALID; break;
+    }
+    return state_word(result);
 }
