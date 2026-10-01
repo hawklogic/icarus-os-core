@@ -291,6 +291,16 @@ shell_quote = '$(subst ','"'"',$(1))'
 C_COMMAND_STAMP = $(OBJ_DIR)/.c-command
 LINK_COMMAND_STAMP = $(OBJ_DIR)/.link-command
 
+# GNU Make 3.x can treat a changed stamp and an older object as equally dated
+# within one second. Rebuild C objects and relink on those versions so a flag
+# change cannot leave old code in an incremental image. Newer Make keeps the
+# content-stable stamp path and its unchanged-command no-op.
+ifneq ($(filter 3.%,$(MAKE_VERSION)),)
+LEGACY_C_LINK_FORCE := FORCE_LEGACY_C_LINK
+.PHONY: FORCE_LEGACY_C_LINK
+FORCE_LEGACY_C_LINK:
+endif
+
 .PHONY: FORCE_BUILD_FLAGS
 FORCE_BUILD_FLAGS:
 
@@ -337,7 +347,7 @@ $(DEP_DIR):
 
 # Link ELF file
 # Prevent coverage builds for embedded target (code too large)
-$(ELF_FILE): $(ALL_OBJECTS) $(LINK_COMMAND_STAMP) $(BUILD_MAKEFILE) | $(BUILD_DIR)
+$(ELF_FILE): $(ALL_OBJECTS) $(LINK_COMMAND_STAMP) $(BUILD_MAKEFILE) $(LEGACY_C_LINK_FORCE) | $(BUILD_DIR)
 	@if [ "$(COVERAGE)" = "yes" ] && [ "$(TEST)" != "yes" ]; then \
 		echo "ERROR: Coverage cannot be used for embedded target builds."; \
 		echo "Coverage instrumentation makes code too large for flash."; \
@@ -354,7 +364,7 @@ $(ELF_FILE): $(ALL_OBJECTS) $(LINK_COMMAND_STAMP) $(BUILD_MAKEFILE) | $(BUILD_DI
 	@echo "Build complete: $@"
 
 # Compile C sources - use VENDOR_CFLAGS for vendor code, CFLAGS for application code
-$(OBJ_DIR)/%.o: $(PROJECT_ROOT)/%.c $(C_COMMAND_STAMP) $(BUILD_MAKEFILE) | $(OBJ_DIR) $(DEP_DIR)
+$(OBJ_DIR)/%.o: $(PROJECT_ROOT)/%.c $(C_COMMAND_STAMP) $(BUILD_MAKEFILE) $(LEGACY_C_LINK_FORCE) | $(OBJ_DIR) $(DEP_DIR)
 	@echo "Compiling $<"
 	@mkdir -p $(dir $@)
 	@mkdir -p $(dir $(@:$(OBJ_DIR)/%.o=$(DEP_DIR)/%.d))
