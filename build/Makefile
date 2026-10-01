@@ -291,10 +291,10 @@ shell_quote = '$(subst ','"'"',$(1))'
 C_COMMAND_STAMP = $(OBJ_DIR)/.c-command
 LINK_COMMAND_STAMP = $(OBJ_DIR)/.link-command
 
-# GNU Make 3.x can treat a changed stamp and an older object as equally dated
-# within one second. Rebuild C objects and relink on those versions so a flag
-# change cannot leave old code in an incremental image. Newer Make keeps the
-# content-stable stamp path and its unchanged-command no-op.
+# GNU Make 3.x can treat changed outputs as equally dated within one second.
+# Rebuild C objects, relink, and refresh derived images on those versions so a
+# flag change cannot leave old code in an incremental image. Newer Make keeps
+# the content-stable stamp path and its unchanged-command no-op.
 ifneq ($(filter 3.%,$(MAKE_VERSION)),)
 LEGACY_C_LINK_FORCE := FORCE_LEGACY_C_LINK
 .PHONY: FORCE_LEGACY_C_LINK
@@ -382,17 +382,17 @@ $(OBJ_DIR)/%.o: $(PROJECT_ROOT)/%.s | $(OBJ_DIR) $(DEP_DIR)
 	@$(AS) $(ASFLAGS) -c $< -o $@
 
 # Generate HEX file
-$(HEX_FILE): $(ELF_FILE)
+$(HEX_FILE): $(ELF_FILE) $(LEGACY_C_LINK_FORCE)
 	@echo "Creating $@"
 	@$(OBJCOPY) -O ihex $< $@
 
 # Generate BIN file
-$(BIN_FILE): $(ELF_FILE)
+$(BIN_FILE): $(ELF_FILE) $(LEGACY_C_LINK_FORCE)
 	@echo "Creating $@"
 	@$(OBJCOPY) -O binary $< $@
 
 # Generate list file
-$(LIST_FILE): $(ELF_FILE)
+$(LIST_FILE): $(ELF_FILE) $(LEGACY_C_LINK_FORCE)
 	@echo "Creating $@"
 	@$(OBJDUMP) -h -S $< > $@
 
