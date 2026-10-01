@@ -718,21 +718,21 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-18" name="line-18"></a><span class="cm">/* USER CODE END Header */</span>
 <a id="line-19" name="line-19"></a>
 <a id="line-20" name="line-20"></a><span class="cm">/* Includes ------------------------------------------------------------------*/</span>
-<a id="line-21" name="line-21"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;bsp/config.h&quot;</span>
+<a id="line-21" name="line-21"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"bsp/config.h"</span>
 <a id="line-22" name="line-22"></a>
-<a id="line-23" name="line-23"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;stm32h7xx_it.h&quot;</span>
+<a id="line-23" name="line-23"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"stm32h7xx_it.h"</span>
 <a id="line-24" name="line-24"></a><span class="cm">/* Private includes ----------------------------------------------------------*/</span>
 <a id="line-25" name="line-25"></a><span class="cm">/* USER CODE BEGIN Includes */</span>
 <a id="line-26" name="line-26"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;stdbool.h&gt;</span>
-<a id="line-27" name="line-27"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;icarus/config.h&quot;</span>
-<a id="line-28" name="line-28"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;icarus/svc.h&quot;</span>
+<a id="line-27" name="line-27"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"icarus/config.h"</span>
+<a id="line-28" name="line-28"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"icarus/svc.h"</span>
 <a id="line-29" name="line-29"></a><span class="cp">#ifndef HOST_TEST</span>
-<a id="line-30" name="line-30"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;st7735.h&quot;</span>
-<a id="line-31" name="line-31"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;lcd.h&quot;</span>
+<a id="line-30" name="line-30"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"st7735.h"</span>
+<a id="line-31" name="line-31"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"lcd.h"</span>
 <a id="line-32" name="line-32"></a><span class="cp">#endif</span>
 <a id="line-33" name="line-33"></a><span class="cp">#ifdef HOST_TEST</span>
 <a id="line-34" name="line-34"></a><span class="c1">// For host testing, include mock header for os_yield_pendsv</span>
-<a id="line-35" name="line-35"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;mock_asm.h&quot;</span>
+<a id="line-35" name="line-35"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"mock_asm.h"</span>
 <a id="line-36" name="line-36"></a><span class="cp">#endif</span>
 <a id="line-37" name="line-37"></a><span class="cm">/* USER CODE END Includes */</span>
 <a id="line-38" name="line-38"></a>
@@ -805,11 +805,11 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-105" name="line-105"></a>
 <a id="line-106" name="line-106"></a><span class="w">  </span><span class="cm">/* Extract stacked PC via PSP or MSP */</span>
 <a id="line-107" name="line-107"></a><span class="hll"><span class="w">  </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">*</span><span class="n">sp</span><span class="p">;</span><span class="error2">&lt;--- Variable 'sp' can be declared as pointer to const</span>
-</span><a id="line-108" name="line-108"></a><span class="w">  </span><span class="n">__asm__</span><span class="w"> </span><span class="k">volatile</span><span class="w"> </span><span class="p">(</span><span class="s">&quot;tst lr, #4</span><span class="se">\n</span><span class="s">&quot;</span>
-<a id="line-109" name="line-109"></a><span class="w">                    </span><span class="s">&quot;ite eq</span><span class="se">\n</span><span class="s">&quot;</span>
-<a id="line-110" name="line-110"></a><span class="w">                    </span><span class="s">&quot;mrseq %0, msp</span><span class="se">\n</span><span class="s">&quot;</span>
-<a id="line-111" name="line-111"></a><span class="w">                    </span><span class="s">&quot;mrsne %0, psp</span><span class="se">\n</span><span class="s">&quot;</span>
-<a id="line-112" name="line-112"></a><span class="w">                    </span><span class="o">:</span><span class="w"> </span><span class="s">&quot;=r&quot;</span><span class="w"> </span><span class="p">(</span><span class="n">sp</span><span class="p">));</span>
+</span><a id="line-108" name="line-108"></a><span class="w">  </span><span class="n">__asm__</span><span class="w"> </span><span class="k">volatile</span><span class="w"> </span><span class="p">(</span><span class="s">"tst lr, #4</span><span class="se">\n</span><span class="s">"</span>
+<a id="line-109" name="line-109"></a><span class="w">                    </span><span class="s">"ite eq</span><span class="se">\n</span><span class="s">"</span>
+<a id="line-110" name="line-110"></a><span class="w">                    </span><span class="s">"mrseq %0, msp</span><span class="se">\n</span><span class="s">"</span>
+<a id="line-111" name="line-111"></a><span class="w">                    </span><span class="s">"mrsne %0, psp</span><span class="se">\n</span><span class="s">"</span>
+<a id="line-112" name="line-112"></a><span class="w">                    </span><span class="o">:</span><span class="w"> </span><span class="s">"=r"</span><span class="w"> </span><span class="p">(</span><span class="n">sp</span><span class="p">));</span>
 <a id="line-113" name="line-113"></a><span class="w">  </span><span class="k">volatile</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">stacked_r0</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="n">sp</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
 <a id="line-114" name="line-114"></a><span class="w">  </span><span class="k">volatile</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">stacked_r1</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="n">sp</span><span class="p">[</span><span class="mi">1</span><span class="p">];</span>
 <a id="line-115" name="line-115"></a><span class="w">  </span><span class="k">volatile</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">stacked_r2</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="n">sp</span><span class="p">[</span><span class="mi">2</span><span class="p">];</span>
@@ -881,14 +881,14 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-181" name="line-181"></a>
 <a id="line-182" name="line-182"></a><span class="w">  </span><span class="cm">/* Check if fault came from thread mode (PSP) vs kernel (MSP) */</span>
 <a id="line-183" name="line-183"></a><span class="w">  </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">lr_val</span><span class="p">;</span>
-<a id="line-184" name="line-184"></a><span class="w">  </span><span class="n">__asm__</span><span class="w"> </span><span class="k">volatile</span><span class="w"> </span><span class="p">(</span><span class="s">&quot;mov %0, lr&quot;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s">&quot;=r&quot;</span><span class="w"> </span><span class="p">(</span><span class="n">lr_val</span><span class="p">));</span>
+<a id="line-184" name="line-184"></a><span class="w">  </span><span class="n">__asm__</span><span class="w"> </span><span class="k">volatile</span><span class="w"> </span><span class="p">(</span><span class="s">"mov %0, lr"</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s">"=r"</span><span class="w"> </span><span class="p">(</span><span class="n">lr_val</span><span class="p">));</span>
 <a id="line-185" name="line-185"></a><span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="n">from_psp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">lr_val</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="mh">0x4</span><span class="p">)</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 <a id="line-186" name="line-186"></a>
 <a id="line-187" name="line-187"></a><span class="w">  </span><span class="cm">/* Recover from data access violations (read or write) from unprivileged tasks */</span>
 <a id="line-188" name="line-188"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">is_daccviol</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="n">is_iaccviol</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">from_psp</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <a id="line-189" name="line-189"></a><span class="w">    </span><span class="cm">/* Recoverable: advance stacked PC past the faulting Thumb instruction */</span>
 <a id="line-190" name="line-190"></a><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">*</span><span class="n">sp</span><span class="p">;</span>
-<a id="line-191" name="line-191"></a><span class="w">    </span><span class="n">__asm__</span><span class="w"> </span><span class="k">volatile</span><span class="w"> </span><span class="p">(</span><span class="s">&quot;mrs %0, psp&quot;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s">&quot;=r&quot;</span><span class="w"> </span><span class="p">(</span><span class="n">sp</span><span class="p">));</span>
+<a id="line-191" name="line-191"></a><span class="w">    </span><span class="n">__asm__</span><span class="w"> </span><span class="k">volatile</span><span class="w"> </span><span class="p">(</span><span class="s">"mrs %0, psp"</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s">"=r"</span><span class="w"> </span><span class="p">(</span><span class="n">sp</span><span class="p">));</span>
 <a id="line-192" name="line-192"></a><span class="w">    </span>
 <a id="line-193" name="line-193"></a><span class="w">    </span><span class="cm">/* Capture fault address for debugging */</span>
 <a id="line-194" name="line-194"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">cfsr</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">SCB_CFSR_MMARVALID_Msk</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
@@ -1000,11 +1000,11 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-300" name="line-300"></a><span class="n">ITCM_FUNC</span><span class="w"> </span><span class="nf">__attribute__</span><span class="p">((</span><span class="kr">naked</span><span class="p">))</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">SVC_Handler</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
 <a id="line-301" name="line-301"></a><span class="p">{</span>
 <a id="line-302" name="line-302"></a><span class="w">  </span><span class="n">__asm__</span><span class="w"> </span><span class="k">volatile</span><span class="w"> </span><span class="p">(</span>
-<a id="line-303" name="line-303"></a><span class="w">    </span><span class="s">&quot;tst lr, #4</span><span class="se">\n</span><span class="s">&quot;</span>
-<a id="line-304" name="line-304"></a><span class="w">    </span><span class="s">&quot;ite eq</span><span class="se">\n</span><span class="s">&quot;</span>
-<a id="line-305" name="line-305"></a><span class="w">    </span><span class="s">&quot;mrseq r0, msp</span><span class="se">\n</span><span class="s">&quot;</span>
-<a id="line-306" name="line-306"></a><span class="w">    </span><span class="s">&quot;mrsne r0, psp</span><span class="se">\n</span><span class="s">&quot;</span>
-<a id="line-307" name="line-307"></a><span class="w">    </span><span class="s">&quot;b SVC_Handler_C</span><span class="se">\n</span><span class="s">&quot;</span>
+<a id="line-303" name="line-303"></a><span class="w">    </span><span class="s">"tst lr, #4</span><span class="se">\n</span><span class="s">"</span>
+<a id="line-304" name="line-304"></a><span class="w">    </span><span class="s">"ite eq</span><span class="se">\n</span><span class="s">"</span>
+<a id="line-305" name="line-305"></a><span class="w">    </span><span class="s">"mrseq r0, msp</span><span class="se">\n</span><span class="s">"</span>
+<a id="line-306" name="line-306"></a><span class="w">    </span><span class="s">"mrsne r0, psp</span><span class="se">\n</span><span class="s">"</span>
+<a id="line-307" name="line-307"></a><span class="w">    </span><span class="s">"b SVC_Handler_C</span><span class="se">\n</span><span class="s">"</span>
 <a id="line-308" name="line-308"></a><span class="w">  </span><span class="p">);</span>
 <a id="line-309" name="line-309"></a><span class="p">}</span>
 <a id="line-310" name="line-310"></a><span class="cp">#endif</span>
@@ -1041,7 +1041,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-341" name="line-341"></a><span class="p">{</span>
 <a id="line-342" name="line-342"></a><span class="w">  </span><span class="cm">/* USER CODE BEGIN PendSV_IRQn 0 */</span>
 <a id="line-343" name="line-343"></a><span class="w">  </span><span class="n">__asm__</span><span class="w"> </span><span class="k">volatile</span><span class="w"> </span><span class="p">(</span>
-<a id="line-344" name="line-344"></a><span class="w">    </span><span class="s">&quot;b os_yield_pendsv&quot;</span>
+<a id="line-344" name="line-344"></a><span class="w">    </span><span class="s">"b os_yield_pendsv"</span>
 <a id="line-345" name="line-345"></a><span class="w">  </span><span class="p">);</span>
 <a id="line-346" name="line-346"></a><span class="w">  </span>
 <a id="line-347" name="line-347"></a><span class="w">  </span><span class="cm">/* USER CODE END PendSV_IRQn 0 */</span>

@@ -384,7 +384,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-7" name="line-7"></a><span class="cm"> *          transmit ring by cdc_tx_write() (an SVC from tasks, a direct call</span>
 <a id="line-8" name="line-8"></a><span class="cm"> *          from privileged code and configurable-priority handlers; not</span>
 <a id="line-9" name="line-9"></a><span class="cm"> *          from NMI or HardFault).  Each call is one masked copy, so it is</span>
-<a id="line-10" name="line-10"></a><span class="cm"> *          atomic; newlib&#39;s shared stdout `FILE` buffer in front of</span>
+<a id="line-10" name="line-10"></a><span class="cm"> *          atomic; newlib's shared stdout `FILE` buffer in front of</span>
 <a id="line-11" name="line-11"></a><span class="cm"> *          `_write()` is not locked, so concurrent `printf()` callers must</span>
 <a id="line-12" name="line-12"></a><span class="cm"> *          serialise themselves (see retarget_stdio.h).  Partial writes are</span>
 <a id="line-13" name="line-13"></a><span class="cm"> *          accepted, and whatever did not fit is added to a drop counter.</span>
@@ -400,12 +400,12 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-23" name="line-23"></a><span class="cm"> *            Licensed under the Apache License, Version 2.0</span>
 <a id="line-24" name="line-24"></a><span class="cm"> */</span>
 <a id="line-25" name="line-25"></a>
-<a id="line-26" name="line-26"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;bsp/retarget_stdio.h&quot;</span>
+<a id="line-26" name="line-26"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"bsp/retarget_stdio.h"</span>
 <a id="line-27" name="line-27"></a>
 <a id="line-28" name="line-28"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;stdbool.h&gt;</span>
 <a id="line-29" name="line-29"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;stddef.h&gt;</span>
 <a id="line-30" name="line-30"></a>
-<a id="line-31" name="line-31"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;bsp/cdc.h&quot;</span>
+<a id="line-31" name="line-31"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"bsp/cdc.h"</span>
 <a id="line-32" name="line-32"></a>
 <a id="line-33" name="line-33"></a><span class="cm">/** @brief Console bytes dropped since boot (plain RAM: readable by tasks). */</span>
 <a id="line-34" name="line-34"></a><span class="k">static</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">stdio_dropped</span><span class="p">;</span>
@@ -437,8 +437,8 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-60" name="line-60"></a><span class="cm">/* Legacy entry for direct callers only: newlib reaches the ring through the</span>
 <a id="line-61" name="line-61"></a><span class="cm"> * strong _write() below, never through this function. */</span>
 <a id="line-62" name="line-62"></a><span class="kt">int</span><span class="w"> </span><span class="nf">__io_putchar</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">ch</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<a id="line-63" name="line-63"></a><span class="w">    </span><span class="kt">uint8_t</span><span class="w"> </span><span class="n">byte</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="kt">uint8_t</span><span class="p">)</span><span class="n">ch</span><span class="p">;</span>
-<a id="line-64" name="line-64"></a><span class="w">    </span><span class="p">(</span><span class="kt">void</span><span class="p">)</span><span class="n">stdio_write</span><span class="p">(</span><span class="o">&amp;</span><span class="n">byte</span><span class="p">,</span><span class="w"> </span><span class="mi">1u</span><span class="p">);</span>
+<a id="line-63" name="line-63"></a><span class="w">    </span><span class="kt">uint8_t</span><span class="w"> </span><span class="kt">byte</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="kt">uint8_t</span><span class="p">)</span><span class="n">ch</span><span class="p">;</span>
+<a id="line-64" name="line-64"></a><span class="w">    </span><span class="p">(</span><span class="kt">void</span><span class="p">)</span><span class="n">stdio_write</span><span class="p">(</span><span class="o">&amp;</span><span class="kt">byte</span><span class="p">,</span><span class="w"> </span><span class="mi">1u</span><span class="p">);</span>
 <a id="line-65" name="line-65"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">ch</span><span class="p">;</span>
 <a id="line-66" name="line-66"></a><span class="p">}</span>
 <a id="line-67" name="line-67"></a>

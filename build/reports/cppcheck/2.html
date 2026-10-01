@@ -711,7 +711,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-19" name="line-19"></a><span class="cm">/* USER CODE END Header */</span>
 <a id="line-20" name="line-20"></a>
 <a id="line-21" name="line-21"></a><span class="cm">/* Includes ------------------------------------------------------------------*/</span>
-<a id="line-22" name="line-22"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;usbd_cdc_if.h&quot;</span>
+<a id="line-22" name="line-22"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"usbd_cdc_if.h"</span>
 <a id="line-23" name="line-23"></a>
 <a id="line-24" name="line-24"></a><span class="cm">/* USER CODE BEGIN INCLUDE */</span>
 <a id="line-25" name="line-25"></a><span class="cm">/*</span>
@@ -721,7 +721,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-29" name="line-29"></a><span class="cm"> * privileged USB CDC ISR context, and the consumer goes through the</span>
 <a id="line-30" name="line-30"></a><span class="cm"> * SVC gates declared in icarus/cdc_rx.h.</span>
 <a id="line-31" name="line-31"></a><span class="cm"> */</span>
-<a id="line-32" name="line-32"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;icarus/cdc_rx.h&quot;</span>
+<a id="line-32" name="line-32"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"icarus/cdc_rx.h"</span>
 <a id="line-33" name="line-33"></a><span class="cm">/*</span>
 <a id="line-34" name="line-34"></a><span class="cm"> * All transmission goes through the kernel USB CDC transmit ring</span>
 <a id="line-35" name="line-35"></a><span class="cm"> * (bsp/cdc.h): the callbacks below advance it on transfer completion and</span>
@@ -730,7 +730,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-38" name="line-38"></a><span class="cm"> * TxState check-then-start cannot race.  DTR changes go to the ring, which</span>
 <a id="line-39" name="line-39"></a><span class="cm"> * drops output written while the port was closed (__cdc_tx_on_dtr()).</span>
 <a id="line-40" name="line-40"></a><span class="cm"> */</span>
-<a id="line-41" name="line-41"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;bsp/cdc.h&quot;</span>
+<a id="line-41" name="line-41"></a><span class="cp">#include</span><span class="w"> </span><span class="cpf">"bsp/cdc.h"</span>
 <a id="line-42" name="line-42"></a><span class="cm">/* USER CODE END INCLUDE */</span>
 <a id="line-43" name="line-43"></a>
 <a id="line-44" name="line-44"></a><span class="cm">/* Private typedef -----------------------------------------------------------*/</span>
@@ -794,7 +794,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-102" name="line-102"></a><span class="cm">  * @{</span>
 <a id="line-103" name="line-103"></a><span class="cm">  */</span>
 <a id="line-104" name="line-104"></a><span class="cm">/* Create buffer for reception and transmission           */</span>
-<a id="line-105" name="line-105"></a><span class="cm">/* It&#39;s up to user to redefine and/or remove those define */</span>
+<a id="line-105" name="line-105"></a><span class="cm">/* It's up to user to redefine and/or remove those define */</span>
 <a id="line-106" name="line-106"></a><span class="cm">/** Received data over USB are stored in this buffer      */</span>
 <a id="line-107" name="line-107"></a><span class="kt">uint8_t</span><span class="w"> </span><span class="n">UserRxBufferFS</span><span class="p">[</span><span class="n">APP_RX_DATA_SIZE</span><span class="p">];</span>
 <a id="line-108" name="line-108"></a>
@@ -886,7 +886,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <a id="line-194" name="line-194"></a><span class="w">  </span><span class="n">cdc_dtr_asserted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0U</span><span class="p">;</span>
 <a id="line-195" name="line-195"></a><span class="w">  </span><span class="cm">/* USB reset or disconnect: the transfer in flight will never complete,</span>
 <a id="line-196" name="line-196"></a><span class="cm">   * and the host side of an open port is gone, so report it closed (drops</span>
-<a id="line-197" name="line-197"></a><span class="cm">   * what nobody will read, including the lost transfer&#39;s bytes). */</span>
+<a id="line-197" name="line-197"></a><span class="cm">   * what nobody will read, including the lost transfer's bytes). */</span>
 <a id="line-198" name="line-198"></a><span class="w">  </span><span class="n">__cdc_tx_on_link_reset</span><span class="p">();</span>
 <a id="line-199" name="line-199"></a><span class="w">  </span><span class="p">(</span><span class="kt">void</span><span class="p">)</span><span class="n">__cdc_tx_on_dtr</span><span class="p">(</span><span class="nb">false</span><span class="p">);</span>
 <a id="line-200" name="line-200"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">(</span><span class="n">USBD_OK</span><span class="p">);</span>

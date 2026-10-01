@@ -396,15 +396,15 @@
             <location file="../Core/Src/icarus/svc.c" line="0" column="0"/>
         </error>
         <error id="constVariablePointer" severity="style" msg="Variable &apos;ptr&apos; can be declared as pointer to const" verbose="Variable &apos;ptr&apos; can be declared as pointer to const" cwe="398" file0="../Core/Src/icarus/svc.c">
-            <location file="../Core/Src/icarus/svc.c" line="423" column="23" info="Variable &apos;ptr&apos; can be declared as pointer to const"/>
+            <location file="../Core/Src/icarus/svc.c" line="424" column="23" info="Variable &apos;ptr&apos; can be declared as pointer to const"/>
             <symbol>ptr</symbol>
         </error>
         <error id="constVariablePointer" severity="style" msg="Variable &apos;ptr&apos; can be declared as pointer to const" verbose="Variable &apos;ptr&apos; can be declared as pointer to const" cwe="398" file0="../Core/Src/icarus/svc.c">
-            <location file="../Core/Src/icarus/svc.c" line="428" column="23" info="Variable &apos;ptr&apos; can be declared as pointer to const"/>
+            <location file="../Core/Src/icarus/svc.c" line="429" column="23" info="Variable &apos;ptr&apos; can be declared as pointer to const"/>
             <symbol>ptr</symbol>
         </error>
         <error id="constVariablePointer" severity="style" msg="Variable &apos;ptr&apos; can be declared as pointer to const" verbose="Variable &apos;ptr&apos; can be declared as pointer to const" cwe="398" file0="../Core/Src/icarus/svc.c">
-            <location file="../Core/Src/icarus/svc.c" line="433" column="19" info="Variable &apos;ptr&apos; can be declared as pointer to const"/>
+            <location file="../Core/Src/icarus/svc.c" line="434" column="19" info="Variable &apos;ptr&apos; can be declared as pointer to const"/>
             <symbol>ptr</symbol>
         </error>
         <error id="normalCheckLevelMaxBranches" severity="information" msg="Limiting analysis of branches. Use --check-level=exhaustive to analyze all branches." verbose="Limiting analysis of branches. Use --check-level=exhaustive to analyze all branches." file0="../Core/Src/icarus/tables.c">
