@@ -2077,6 +2077,7 @@ extern void run_button_tests(void);
 extern void run_svc_guard_tests(void);
 extern void run_stdio_tests(void);
 extern void run_bkpram_tests(void);
+extern void run_retained_diag_tests(void);
 extern void run_tables_load_tests(void);
 extern void run_svc_policy_tests(void);
 
@@ -2293,6 +2294,7 @@ int main(void) {
 	run_svc_guard_tests();
 	run_stdio_tests();
 	run_bkpram_tests();
+	run_retained_diag_tests();
 	run_tables_load_tests();
 	run_svc_policy_tests();
 
